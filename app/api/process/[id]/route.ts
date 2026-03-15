@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { processVideo } from "@/lib/ffmpeg";
-import { DEFAULT_EDIT_CONFIG } from "@/lib/types";
-import type { EditConfig } from "@/lib/types";
 
-export const maxDuration = 300; // 5 minutes — requires Vercel Pro; unlimited on VPS
+export const maxDuration = 300; // 5 minutes — requires Vercel Pro
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -13,9 +10,33 @@ interface Params {
 export async function POST(_request: Request, { params }: Params) {
   const { id } = await params;
 
+  // Validate processor env vars immediately — fail loudly before touching the DB
+ const rawProcessorUrl = (process.env.PROCESSOR_URL || "").trim();
+const PROCESSOR_URL = rawProcessorUrl.startsWith("http")
+  ? rawProcessorUrl
+  : `https://${rawProcessorUrl}`;
+const PROCESSOR_SECRET = process.env.PROCESSOR_SECRET;
+
+console.log(`[process:${id}] raw PROCESSOR_URL=${rawProcessorUrl || "(not set)"}`);
+console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not set)"}`);
+
+  console.log(`[process:${id}] PROCESSOR_URL=${PROCESSOR_URL ?? "(not set)"}`);
+
+  if (!PROCESSOR_URL || !PROCESSOR_SECRET) {
+    const missing = [
+      !PROCESSOR_URL    && "PROCESSOR_URL",
+      !PROCESSOR_SECRET && "PROCESSOR_SECRET",
+    ].filter(Boolean).join(", ");
+    console.error(`[process:${id}] missing env vars: ${missing}`);
+    return NextResponse.json(
+      { error: `Server misconfigured — missing env vars: ${missing}` },
+      { status: 500 }
+    );
+  }
+
   try {
-    const supabase = await createClient();
-    const serviceClient = await createServiceClient();
+    const supabase       = await createClient();
+    const serviceClient = createServiceClient();
 
     // Verify the caller is authenticated
     const {
@@ -28,10 +49,10 @@ export async function POST(_request: Request, { params }: Params) {
 
     console.log(`[process:${id}] user=${user.id}`);
 
-    // Fetch the clip — RLS ensures it belongs to this user
+    // Fetch clip — RLS guarantees it belongs to this user
     const { data: clip, error: clipError } = await supabase
       .from("clips")
-      .select("*")
+      .select("id, status, input_path, user_id")
       .eq("id", id)
       .eq("user_id", user.id)
       .single();
@@ -41,171 +62,78 @@ export async function POST(_request: Request, { params }: Params) {
       return NextResponse.json({ error: "Clip not found" }, { status: 404 });
     }
 
-    console.log(`[process:${id}] clip status=${clip.status}, input_path=${clip.input_path}`);
+    console.log(`[process:${id}] status=${clip.status}, input_path=${clip.input_path}`);
 
     if (!clip.input_path) {
-      return NextResponse.json(
-        { error: "Clip has no input file." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Clip has no input file." }, { status: 400 });
     }
 
-    // Prevent duplicate concurrent processing runs
     if (clip.status === "processing") {
-      return NextResponse.json(
-        { error: "Clip is already processing." },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "Clip is already processing." }, { status: 409 });
     }
 
-    // Mark as processing — use service client so this write always succeeds
+    // Mark as processing before calling the processor
     await serviceClient
       .from("clips")
       .update({ status: "processing", error_message: null })
       .eq("id", id);
 
-    // ── Delegate to external processor if configured ──────────────────────────
-    // On Vercel the ffmpeg-static binary is stripped from the deployment bundle
-    // (it exceeds the 250 MB size limit). Set PROCESSOR_URL to a Railway/Render
-    // service that runs the actual FFmpeg work. Falls back to local execution in
-    // development when PROCESSOR_URL is unset.
-    const PROCESSOR_URL    = process.env.PROCESSOR_URL;
-    const PROCESSOR_SECRET = process.env.PROCESSOR_SECRET;
+    // ── Forward to Railway processor ──────────────────────────────────────────
+    console.log(`[process:${id}] → forwarding to processor: ${PROCESSOR_URL}/process/${id}`);
 
-    if (PROCESSOR_URL) {
-      if (!PROCESSOR_SECRET) {
-        console.error(`[process:${id}] PROCESSOR_URL is set but PROCESSOR_SECRET is missing`);
-        await serviceClient
-          .from("clips")
-          .update({ status: "error", error_message: "Processor misconfigured (missing secret)." })
-          .eq("id", id);
-        return NextResponse.json(
-          { error: "Processor misconfigured." },
-          { status: 500 }
-        );
-      }
-
-      console.log(`[process:${id}] delegating to external processor: ${PROCESSOR_URL}`);
-      try {
-        const resp = await fetch(`${PROCESSOR_URL}/process/${id}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Processor-Secret": PROCESSOR_SECRET,
-          },
-          // Give the processor almost the full Vercel budget
-          signal: AbortSignal.timeout(280_000),
-        });
-        const json = await resp.json().catch(() => ({})) as {
-          error?: string;
-          success?: boolean;
-          outputPath?: string;
-        };
-        if (!resp.ok) {
-          return NextResponse.json(
-            { error: json.error ?? "Processor returned an error." },
-            { status: resp.status }
-          );
-        }
-        return NextResponse.json(json);
-      } catch (delegateError) {
-        const msg =
-          delegateError instanceof Error
-            ? delegateError.message
-            : "Failed to reach processor.";
-        console.error(`[process:${id}] delegation failed:`, msg);
-        await serviceClient
-          .from("clips")
-          .update({ status: "error", error_message: msg })
-          .eq("id", id);
-        return NextResponse.json({ error: msg }, { status: 500 });
-      }
-    }
-    // ── Local FFmpeg (development only) ───────────────────────────────────────
-
-    // Download the input file from storage
-    console.log(`[process:${id}] downloading from storage: ${clip.input_path}`);
-    const { data: fileData, error: downloadError } = await serviceClient.storage
-      .from("clips")
-      .download(clip.input_path);
-
-    if (downloadError || !fileData) {
-      console.error(`[process:${id}] download failed:`, downloadError?.message);
-      await serviceClient
-        .from("clips")
-        .update({ status: "error", error_message: "Failed to download input file from storage." })
-        .eq("id", id);
-      return NextResponse.json(
-        { error: "Failed to download input file." },
-        { status: 500 }
-      );
-    }
-
-    // Build EditConfig — prefer saved edit_config, fall back to legacy trim fields
-    const inputBuffer = Buffer.from(await fileData.arrayBuffer());
-    console.log(`[process:${id}] downloaded ${inputBuffer.length} bytes`);
-
-    const savedConfig = clip.edit_config as EditConfig | null;
-    const config: EditConfig = savedConfig ?? {
-      ...DEFAULT_EDIT_CONFIG,
-      trimStart: typeof clip.trim_start_seconds === "number" ? clip.trim_start_seconds : 0,
-      trimEnd:   typeof clip.trim_end_seconds   === "number" ? clip.trim_end_seconds   : null,
-    };
-    console.log(`[process:${id}] config:`, JSON.stringify(config));
-
-    let outputBuffer: Buffer;
-
+    let resp: Response;
     try {
-      outputBuffer = await processVideo(inputBuffer, id, config);
-    } catch (ffmpegError) {
-      const rawMsg = ffmpegError instanceof Error ? ffmpegError.message : "FFmpeg processing failed.";
-      const stderr = (ffmpegError as Error & { ffmpegStderr?: string }).ffmpegStderr ?? "";
-      console.error(`[process:${id}] FFmpeg failed:`, rawMsg);
-      if (stderr) console.error(`[process:${id}] FFmpeg stderr:\n${stderr}`);
-      // Store the first line of the error (safe for DB, readable)
-      const dbMsg = rawMsg.split("\n")[0].slice(0, 500);
-      await serviceClient
-        .from("clips")
-        .update({ status: "error", error_message: dbMsg })
-        .eq("id", id);
-      // Return a useful summary to the client
-      return NextResponse.json({ error: dbMsg }, { status: 500 });
-    }
-
-    // Upload processed output
-    const outputPath = `${user.id}/${id}/output.mp4`;
-    console.log(`[process:${id}] uploading ${outputBuffer.length} bytes to ${outputPath}`);
-
-    const { error: uploadError } = await serviceClient.storage
-      .from("clips")
-      .upload(outputPath, outputBuffer, {
-        contentType: "video/mp4",
-        upsert: true,
+      resp = await fetch(`${PROCESSOR_URL}/process/${id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Processor-Secret": PROCESSOR_SECRET,
+        },
+        signal: AbortSignal.timeout(280_000), // 4m40s — leaves headroom under maxDuration
       });
-
-    if (uploadError) {
-      console.error(`[process:${id}] storage upload failed:`, uploadError.message);
+    } catch (fetchError) {
+      const msg =
+        fetchError instanceof Error ? fetchError.message : "Could not reach processor.";
+      console.error(`[process:${id}] fetch to processor failed:`, msg);
       await serviceClient
         .from("clips")
-        .update({ status: "error", error_message: "Failed to upload processed video to storage." })
+        .update({ status: "error", error_message: msg })
         .eq("id", id);
-      return NextResponse.json(
-        { error: "Failed to upload processed video." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: msg }, { status: 502 });
     }
 
-    // Mark as ready
-    console.log(`[process:${id}] done — marking ready, output_path=${outputPath}`);
-    await serviceClient
-      .from("clips")
-      .update({ status: "ready", output_path: outputPath, error_message: null })
-      .eq("id", id);
+    const json = await resp.json().catch(() => ({})) as {
+      message: string | undefined;
+      error?: string;
+      success?: boolean;
+      outputPath?: string;
+    };
 
-    return NextResponse.json({ success: true, outputPath });
+    console.log(`[process:${id}] processor response: status=${resp.status}`, JSON.stringify(json));
+
+    if (!resp.ok) {
+  const processorError =
+    json.error ||
+    json.message ||
+    `Processor returned an error (status ${resp.status}).`;
+
+  console.error(`[process:${id}] processor error:`, processorError);
+
+  await serviceClient
+    .from("clips")
+    .update({ status: "error", error_message: processorError })
+    .eq("id", id);
+
+  return NextResponse.json(
+    { error: processorError },
+    { status: resp.status }
+  );
+}
+
+    return NextResponse.json(json);
+
   } catch (err) {
-    console.error("[process] unexpected error:", err);
-    // Best-effort status update — id is in scope from the outer try
+    console.error(`[process:${id}] unexpected error:`, err);
     try {
       const serviceClient = await createServiceClient();
       const msg = err instanceof Error ? err.message : "Unexpected server error.";

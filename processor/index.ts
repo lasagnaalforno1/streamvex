@@ -250,13 +250,18 @@ app.post("/process/:id", requireSecret, async (req: Request, res: Response) => {
       .download(clip.input_path);
 
     if (downloadError || !fileData) {
-      console.error(`[process:${clipId}] download failed:`, downloadError?.message);
-      await supabase
-        .from("clips")
-        .update({ status: "error", error_message: "Failed to download input file." })
-        .eq("id", clipId);
-      return res.status(500).json({ error: "Failed to download input file." });
-    }
+  console.error(`[process:${clipId}] download failed:`, downloadError?.message);
+
+  await supabase
+    .from("clips")
+    .update({
+      status: "error",
+      error_message: "Failed to download input file."
+    })
+    .eq("id", clipId);
+
+  return res.status(500).json({ error: "Failed to download input file." });
+}
 
     const inputBuffer = Buffer.from(await fileData.arrayBuffer());
     console.log(`[process:${clipId}] downloaded ${inputBuffer.length} bytes`);
@@ -288,29 +293,41 @@ app.post("/process/:id", requireSecret, async (req: Request, res: Response) => {
     }
 
     // Upload output
-    const outputPath = `${clip.user_id}/${clipId}/output.mp4`;
-    console.log(`[process:${clipId}] uploading ${outputBuffer.length} bytes → ${outputPath}`);
-    const { error: uploadError } = await supabase.storage
-      .from("clips")
-      .upload(outputPath, outputBuffer, { contentType: "video/mp4", upsert: true });
+    // Upload output
+const outputPath = `${clip.user_id}/${clipId}/output.mp4`;
 
-    if (uploadError) {
-      console.error(`[process:${clipId}] upload failed:`, uploadError.message);
-      await supabase
-        .from("clips")
-        .update({ status: "error", error_message: "Failed to upload processed video." })
-        .eq("id", clipId);
-      return res.status(500).json({ error: "Failed to upload processed video." });
-    }
+const { error: uploadError } = await supabase.storage
+  .from("clips")
+  .upload(outputPath, outputBuffer, { contentType: "video/mp4", upsert: true });
 
-    // Mark ready
-    await supabase
-      .from("clips")
-      .update({ status: "ready", output_path: outputPath, error_message: null })
-      .eq("id", clipId);
+if (uploadError) {
+  console.error(`[process:${clipId}] upload failed:`, uploadError.message);
 
-    console.log(`[process:${clipId}] ── done ✓ ──`);
-    return res.json({ success: true, outputPath });
+  await supabase
+    .from("clips")
+    .update({
+      status: "error",
+      error_message: "Failed to upload processed video."
+    })
+    .eq("id", clipId);
+
+  return res.status(500).json({ error: "Failed to upload processed video." });
+}
+
+    // Mark completed
+const { error: completeError } = await supabase
+  .from("clips")
+  .update({ status: "completed", output_path: outputPath, error_message: null })
+  .eq("id", clipId);
+
+if (completeError) {
+  console.error(`[process:${clipId}] failed to mark completed:`, completeError.message);
+  return res.status(500).json({ error: "Failed to update clip status to completed." });
+}
+
+console.log(`[process:${clipId}] status updated to completed`);
+console.log(`[process:${clipId}] ── done ✓ ──`);
+return res.json({ success: true, outputPath });
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unexpected error.";

@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import type { Clip } from "@/lib/types";
 import StatusBadge from "@/components/ui/StatusBadge";

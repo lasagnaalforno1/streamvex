@@ -351,7 +351,8 @@ return res.json({ success: true, outputPath });
   }
 });
 
-const PORT = parseInt(process.env.PORT ?? "3001", 10);
-app.listen(PORT, () => {
-  console.log(`[processor] listening on port ${PORT}`);
+const PORT = parseInt(process.env.PORT || "3001", 10);
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`[processor] listening on host 0.0.0.0 port ${PORT}`);
 });

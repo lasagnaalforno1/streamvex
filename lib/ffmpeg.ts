@@ -54,8 +54,8 @@ function buildFilterComplex(config: EditConfig): string {
 
   // fullscreen_facecam_top:  facecam top 35 % (672 px) + gameplay bottom 65 % (1248 px)
   // fullscreen_facecam_bottom: gameplay top 65 % (1248 px) + facecam bottom 35 % (672 px)
-  const FC_H = 672;  // 1920 * 0.35
-  const GP_H = 1248; // 1920 * 0.65
+  const FC_H = 448;  // 1920 * 0.35
+  const GP_H = 832; // 1920 * 0.65
 
   if (config.layout === "fullscreen_facecam_top") {
     return [

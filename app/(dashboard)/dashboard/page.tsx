@@ -18,6 +18,16 @@ export default async function DashboardPage() {
 
   const typedClips = (clips ?? []) as Clip[];
 
+  // Generate signed preview URLs in parallel (prefer output for ready clips, fallback to input)
+  const previewUrls = await Promise.all(
+    typedClips.map(async (clip) => {
+      const path = clip.output_path ?? clip.input_path;
+      if (!path) return null;
+      const { data } = await supabase.storage.from("clips").createSignedUrl(path, 3600);
+      return data?.signedUrl ?? null;
+    })
+  );
+
   const stats = {
     total:      typedClips.length,
     ready:      typedClips.filter((c) => c.status === "ready").length,
@@ -137,8 +147,8 @@ export default async function DashboardPage() {
             </p>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {typedClips.map((clip) => (
-              <ClipCard key={clip.id} clip={clip} />
+            {typedClips.map((clip, i) => (
+              <ClipCard key={clip.id} clip={clip} previewUrl={previewUrls[i]} />
             ))}
           </div>
         </>

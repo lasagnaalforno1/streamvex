@@ -14,7 +14,7 @@ function clipGradient(id: string): string {
   return `linear-gradient(145deg, hsl(${hue} 50% 10%) 0%, hsl(${hue2} 40% 7%) 100%)`;
 }
 
-export default function ClipCard({ clip }: { clip: Clip }) {
+export default function ClipCard({ clip, previewUrl }: { clip: Clip; previewUrl?: string | null }) {
   const isProcessing = clip.status === "processing" || clip.status === "uploading";
   const isReady      = clip.status === "ready";
   const isError      = clip.status === "error";
@@ -36,6 +36,18 @@ export default function ClipCard({ clip }: { clip: Clip }) {
         className="relative w-full overflow-hidden"
         style={{ aspectRatio: "16/9", background: clipGradient(clip.id) }}
       >
+        {/* Video preview */}
+        {previewUrl && (
+          <video
+            src={previewUrl}
+            className="absolute inset-0 w-full h-full object-cover"
+            muted
+            preload="metadata"
+            playsInline
+            onError={(e) => { (e.target as HTMLVideoElement).style.display = "none"; }}
+          />
+        )}
+
         {/* Processing pulse overlay */}
         {isProcessing && (
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.04] to-transparent animate-pulse" />

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ClipStatusPoller from "@/components/dashboard/ClipStatusPoller";
 import ClipEditor from "@/components/dashboard/ClipEditor";
+import ClipActions from "@/components/dashboard/ClipActions";
 import type { Clip, EditConfig } from "@/lib/types";
 import { formatBytes, formatDate } from "@/lib/utils";
 
@@ -55,6 +56,10 @@ export default async function ClipPage({ params }: Props) {
 
       {/* Breadcrumb */}
       <nav className="flex items-center gap-2 text-sm text-zinc-500">
+        <Link href="/app" className="hover:text-zinc-300 transition-colors">
+          Home
+        </Link>
+        <span>/</span>
         <Link href="/dashboard" className="hover:text-zinc-300 transition-colors">
           Dashboard
         </Link>
@@ -62,13 +67,11 @@ export default async function ClipPage({ params }: Props) {
         <span className="text-zinc-300 truncate max-w-xs">{typedClip.title}</span>
       </nav>
 
-      {/* Header */}
-      <div className="flex items-start gap-3">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-bold text-zinc-50 break-all">{typedClip.title}</h1>
-            <StatusBadge status={typedClip.status} />
-          </div>
+      {/* Header: inline rename + delete */}
+      <div className="space-y-1.5">
+        <ClipActions clipId={typedClip.id} initialTitle={typedClip.title} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={typedClip.status} />
           <p className="text-zinc-500 text-sm">Uploaded {formatDate(typedClip.created_at)}</p>
         </div>
       </div>

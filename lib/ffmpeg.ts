@@ -44,10 +44,11 @@ function buildFilterComplex(config: EditConfig): string {
   const gpExpr = cropExpr(config.gameplayCrop);
   const fcExpr = cropExpr(config.facecamCrop);
 
+
   if (config.layout === "split") {
     return [
-      `[0:v]${gpExpr},scale=1080:1152:force_original_aspect_ratio=increase,crop=1080:1152[gp]`,
-      `[0:v]${fcExpr},scale=1080:768:force_original_aspect_ratio=increase,crop=1080:768[fc]`,
+      `[0:v]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`,
+      `[0:v]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`,
       `[gp][fc]vstack[out]`,
     ].join(";");
   }
@@ -55,22 +56,22 @@ function buildFilterComplex(config: EditConfig): string {
   // fullscreen_facecam_top:  facecam top 35 % (672 px) + gameplay bottom 65 % (1248 px)
   // fullscreen_facecam_bottom: gameplay top 65 % (1248 px) + facecam bottom 35 % (672 px)
   const FC_H = 448;  // 1920 * 0.35
-  const GP_H = 832; // 1920 * 0.65
+  const GP_H = 832/ 1920 * 0.65
 
   if (config.layout === "fullscreen_facecam_top") {
     return [
-      `[0:v]${fcExpr},scale=1080:${FC_H}:force_original_aspect_ratio=increase,crop=1080:${FC_H}[fc]`,
-      `[0:v]${gpExpr},scale=1080:${GP_H}:force_original_aspect_ratio=increase,crop=1080:${GP_H}[gp]`,
-      `[fc][gp]vstack[out]`,
-    ].join(";");
-  }
-
-  // fullscreen_facecam_bottom
-  return [
-    `[0:v]${gpExpr},scale=1080:${GP_H}:force_original_aspect_ratio=increase,crop=1080:${GP_H}[gp]`,
-    `[0:v]${fcExpr},scale=1080:${FC_H}:force_original_aspect_ratio=increase,crop=1080:${FC_H}[fc]`,
+    `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
+    `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
     `[gp][fc]vstack[out]`,
   ].join(";");
+}
+
+  // fullscreen_facecam_bottom
+return [
+  `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
+  `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
+  `[gp][fc]vstack[out]`,
+].join(";");
 }
 
 // ─── public API ───────────────────────────────────────────────────────────────
@@ -119,17 +120,19 @@ export function processVideo(
       // Each flag and its value must be a separate array element so fluent-ffmpeg
       // passes them as distinct argv tokens to the ffmpeg process.
       .outputOptions([
-        "-filter_complex", filterComplex,
-        "-map", "[out]",
-        "-map", "0:a?",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-y",
-      ])
+  "-filter_complex", filterComplex,
+  "-map", "[out]",
+  "-map", "0:a?",
+  "-r", "30",
+  "-c:v", "libx264",
+  "-preset", "ultrafast",
+  "-crf", "28",
+  "-c:a", "aac",
+  "-b:a", "96k",
+  "-movflags", "+faststart",
+  "-pix_fmt", "yuv420p",
+  "-y",
+])
       .output(outputPath)
       .on("stderr", (line: string) => {
         stderrLines.push(line);

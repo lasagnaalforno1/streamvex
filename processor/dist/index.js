@@ -65,24 +65,23 @@ function buildFilterComplex(config) {
     const fcExpr = cropExpr(config.facecamCrop);
     if (config.layout === "split") {
         return [
-            `[0:v]${gpExpr},scale=1080:1152:force_original_aspect_ratio=increase,crop=1080:1152[gp]`,
-            `[0:v]${fcExpr},scale=1080:768:force_original_aspect_ratio=increase,crop=1080:768[fc]`,
+            `[0:v]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`,
+            `[0:v]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`,
             `[gp][fc]vstack[out]`,
         ].join(";");
     }
-    const FC_H = 672;
-    const GP_H = 1248;
+    const FC_H = 448;
+    const GP_H = 832;
     if (config.layout === "fullscreen_facecam_top") {
         return [
-            `[0:v]${fcExpr},scale=1080:${FC_H}:force_original_aspect_ratio=increase,crop=1080:${FC_H}[fc]`,
-            `[0:v]${gpExpr},scale=1080:${GP_H}:force_original_aspect_ratio=increase,crop=1080:${GP_H}[gp]`,
+            `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
+            `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
             `[fc][gp]vstack[out]`,
         ].join(";");
     }
-    // fullscreen_facecam_bottom
     return [
-        `[0:v]${gpExpr},scale=1080:${GP_H}:force_original_aspect_ratio=increase,crop=1080:${GP_H}[gp]`,
-        `[0:v]${fcExpr},scale=1080:${FC_H}:force_original_aspect_ratio=increase,crop=1080:${FC_H}[fc]`,
+        `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
+        `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
         `[gp][fc]vstack[out]`,
     ].join(";");
 }
@@ -112,12 +111,14 @@ function processVideo(inputBuffer, jobId, config) {
             "-filter_complex", filterComplex,
             "-map", "[out]",
             "-map", "0:a?",
+            "-r", "30",
             "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
+            "-preset", "ultrafast",
+            "-crf", "28",
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "96k",
             "-movflags", "+faststart",
+            "-pix_fmt", "yuv420p",
             "-y",
         ])
             .output(outputPath)
@@ -170,6 +171,7 @@ function getServiceClient() {
     });
 }
 // ── Express app ───────────────────────────────────────────────────────────────
+console.log("[startup] processor booting...");
 const app = (0, express_1.default)();
 app.use(express_1.default.json());
 const SECRET = process.env.PROCESSOR_SECRET ?? "";
@@ -296,7 +298,7 @@ app.post("/process/:id", requireSecret, async (req, res) => {
         return res.status(500).json({ error: msg });
     }
 });
-const PORT = parseInt(process.env.PORT ?? "3001", 10);
-app.listen(PORT, () => {
-    console.log(`[processor] listening on port ${PORT}`);
+const PORT = parseInt(process.env.PORT || "3001", 10);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[processor] listening on host 0.0.0.0 port ${PORT}`);
 });

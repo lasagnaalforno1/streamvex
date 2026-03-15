@@ -327,15 +327,19 @@ if (uploadError) {
     // Mark completed
 const { error: completeError } = await supabase
   .from("clips")
-  .update({ status: "completed", output_path: outputPath, error_message: null })
+  .update({
+    status: "ready",
+    output_path: outputPath,
+    error_message: null,
+  })
   .eq("id", clipId);
 
 if (completeError) {
   console.error(`[process:${clipId}] failed to mark completed:`, completeError.message);
-  return res.status(500).json({ error: "Failed to update clip status to completed." });
+  return res.status(500).json({ error: "Failed to update clip status to ready." });
 }
 
-console.log(`[process:${clipId}] status updated to completed`);
+console.log(`[process:${clipId}] status updated to ready`);
 console.log(`[process:${clipId}] ── done ✓ ──`);
 return res.json({ success: true, outputPath });
 

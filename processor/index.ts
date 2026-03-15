@@ -5,6 +5,10 @@ import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 // ── Inline types (standalone — no imports from the Next.js app) ───────────────
 
@@ -354,6 +358,110 @@ return res.json({ success: true, outputPath });
     } catch {}
     return res.status(500).json({ error: msg });
   }
+});
+
+// ── yt-dlp import ─────────────────────────────────────────────────────────────
+//
+// Downloads a video URL using yt-dlp, writing the result to outputPath as mp4.
+// Prints the video title to stdout (captured and returned).
+// Uses the ffmpeg-static binary for any muxing yt-dlp needs to do.
+
+async function downloadWithYtDlp(url: string, outputPath: string): Promise<string> {
+  const args: string[] = [
+    "--no-playlist",
+    // Print title so we can update the clip's title in the DB
+    "--print", "%(title)s",
+    // Best video up to 720p + best audio, merged to mp4
+    "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    "--merge-output-format", "mp4",
+    "-o", outputPath,
+    "--no-warnings",
+    "--no-progress",
+  ];
+
+  // Point yt-dlp at our bundled ffmpeg binary so it can mux video+audio
+  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+    args.push("--ffmpeg-location", ffmpegStatic);
+  }
+
+  args.push(url);
+
+  const { stdout } = await execFileAsync("yt-dlp", args, {
+    timeout: 5 * 60 * 1000, // 5-minute ceiling
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  return stdout.trim().slice(0, 200);
+}
+
+app.post("/import", requireSecret, async (req: Request, res: Response) => {
+  const { clipId, url, userId } = req.body as {
+    clipId?: string;
+    url?: string;
+    userId?: string;
+    platform?: string;
+  };
+
+  if (!clipId || !url || !userId) {
+    res.status(400).json({ error: "Missing clipId, url, or userId." });
+    return;
+  }
+
+  console.log(`\n[import:${clipId}] ── request received ──`);
+  console.log(`[import:${clipId}] url=${url}`);
+
+  // Acknowledge immediately — the actual download runs in the background.
+  // The clip's status poller on the client will pick up the DB change when done.
+  res.json({ ok: true, clipId });
+
+  const supabase  = getServiceClient();
+  const tmpPath   = path.join(os.tmpdir(), `streamvex_import_${clipId}.mp4`);
+
+  (async () => {
+    try {
+      console.log(`[import:${clipId}] starting yt-dlp download…`);
+      const title = await downloadWithYtDlp(url, tmpPath);
+      console.log(`[import:${clipId}] download complete — title="${title}"`);
+
+      if (!fs.existsSync(tmpPath)) {
+        throw new Error("yt-dlp completed but output file not found.");
+      }
+
+      const buffer   = fs.readFileSync(tmpPath);
+      const fileSize = buffer.length;
+      console.log(`[import:${clipId}] file size: ${fileSize} bytes`);
+
+      const inputPath = `${userId}/${clipId}/input.mp4`;
+      const { error: uploadError } = await supabase.storage
+        .from("clips")
+        .upload(inputPath, buffer, { contentType: "video/mp4", upsert: true });
+
+      if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`);
+      console.log(`[import:${clipId}] uploaded to storage: ${inputPath}`);
+
+      const updates: Record<string, unknown> = {
+        status:     "ready",
+        input_path: inputPath,
+        file_size:  fileSize,
+        error_message: null,
+      };
+      if (title) updates.title = title;
+
+      await supabase.from("clips").update(updates).eq("id", clipId);
+      console.log(`[import:${clipId}] ── done ✓ ──`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Import failed.";
+      console.error(`[import:${clipId}] error:`, err);
+      await supabase
+        .from("clips")
+        .update({ status: "error", error_message: msg.slice(0, 500) })
+        .eq("id", clipId);
+    } finally {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {}
+    }
+  })();
 });
 
 const PORT = parseInt(process.env.PORT || "3001", 10);

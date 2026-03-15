@@ -42,13 +42,22 @@ console.log("[ffmpeg] platform:", process.platform, "arch:", process.arch);
 console.log("[ffmpeg] ffmpeg-static resolved path:", ffmpegStatic);
 
 if (ffmpegStatic) {
-  if (fs.existsSync(ffmpegStatic)) {
-    const stat = fs.statSync(ffmpegStatic);
-    console.log(`[ffmpeg] binary exists — ${stat.size} bytes`);
-    ffmpeg.setFfmpegPath(ffmpegStatic);
-  } else {
-    console.error("[ffmpeg] binary NOT FOUND at path:", ffmpegStatic);
-    console.error("[ffmpeg] ls of parent dir:", fs.readdirSync(path.dirname(ffmpegStatic)).join(", "));
+  try {
+    if (fs.existsSync(ffmpegStatic)) {
+      const stat = fs.statSync(ffmpegStatic);
+      console.log(`[ffmpeg] binary exists — ${stat.size} bytes`);
+      ffmpeg.setFfmpegPath(ffmpegStatic);
+    } else {
+      console.error("[ffmpeg] binary NOT FOUND at path:", ffmpegStatic);
+      const parentDir = path.dirname(ffmpegStatic);
+      if (fs.existsSync(parentDir)) {
+        console.error("[ffmpeg] ls of parent dir:", fs.readdirSync(parentDir).join(", "));
+      } else {
+        console.error("[ffmpeg] parent dir does not exist:", parentDir);
+      }
+    }
+  } catch (err) {
+    console.error("[ffmpeg] startup check failed:", err);
   }
 } else {
   console.warn("[ffmpeg] ffmpeg-static returned null — falling back to system ffmpeg");
@@ -194,7 +203,7 @@ function getServiceClient() {
 }
 
 // ── Express app ───────────────────────────────────────────────────────────────
-
+console.log("[startup] processor booting...");
 const app = express();
 app.use(express.json());
 

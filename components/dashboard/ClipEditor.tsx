@@ -125,11 +125,13 @@ export default function ClipEditor({
   const [duration,     setDuration]     = useState(initialDuration ?? 0);
   const [currentTime,  setCurrentTime]  = useState(0);
   const [metaReady,    setMetaReady]    = useState(false);
-  const [saving,       setSaving]       = useState(false);
-  const [saveError,    setSaveError]    = useState<string | null>(null);
-  const [processing,   setProcessing]   = useState(status === "processing");
-  const [processError, setProcessError] = useState<string | null>(null);
-  const [showResult,   setShowResult]   = useState(!!outputUrl);
+  const [saving,        setSaving]       = useState(false);
+  const [saveError,     setSaveError]    = useState<string | null>(null);
+  const [processing,    setProcessing]   = useState(status === "processing");
+  const [processError,  setProcessError] = useState<string | null>(null);
+  const [liveOutputUrl, setLiveOutputUrl] = useState<string | null>(outputUrl);
+  const [showResult,    setShowResult]   = useState(!!outputUrl);
+  const [downloading,   setDownloading]  = useState(false);
 
   const videoRef          = useRef<HTMLVideoElement>(null);
   const canvasRef         = useRef<HTMLCanvasElement>(null);
@@ -157,7 +159,52 @@ export default function ClipEditor({
   useEffect(() => { setProcessing(status === "processing"); }, [status]);
 
   // Auto-show result as soon as an output URL becomes available (after polling refresh)
-  useEffect(() => { if (outputUrl) setShowResult(true); }, [outputUrl]);
+  useEffect(() => {
+    if (outputUrl) {
+      setLiveOutputUrl(outputUrl);
+      setShowResult(true);
+    }
+  }, [outputUrl]);
+
+  // Client-side status polling while processing — avoids depending on router.refresh()
+  useEffect(() => {
+    if (!processing) return;
+    let cancelled = false;
+
+    async function poll() {
+      if (cancelled) return;
+      try {
+        const res = await fetch(`/api/clips/${clipId}/status`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json() as {
+          status: string;
+          outputUrl: string | null;
+          errorMessage: string | null;
+        };
+        if (json.status === "ready") {
+          setLiveOutputUrl(json.outputUrl);
+          setProcessing(false);
+          setShowResult(!!json.outputUrl);
+          router.refresh(); // update header badge / status text on the rest of the page
+          return;
+        }
+        if (json.status === "error") {
+          setProcessError(json.errorMessage ?? "Processing failed.");
+          setProcessing(false);
+          return;
+        }
+      } catch {
+        // network blip — keep polling
+      }
+      if (!cancelled) setTimeout(poll, 3000);
+    }
+
+    const t = setTimeout(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [processing, clipId, router]);
 
   // ── derived ──────────────────────────────────────────────────────────────
 
@@ -265,6 +312,28 @@ export default function ClipEditor({
     }
   }
 
+  async function handleDownload() {
+    if (!liveOutputUrl) return;
+    setDownloading(true);
+    try {
+      const res  = await fetch(liveOutputUrl);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `streamvex-${clipId}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // Fallback: open in new tab
+      window.open(liveOutputUrl, "_blank");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   async function handleProcess() {
     // Clear any stale errors from previous attempts
     setSaveError(null);
@@ -302,7 +371,7 @@ export default function ClipEditor({
   }
 
   // ── result state — shown after successful conversion ──────────────────
-  if (showResult && outputUrl) {
+  if (showResult && liveOutputUrl) {
     return (
       <div className="space-y-4">
         <div className="glass-card p-6">
@@ -315,21 +384,21 @@ export default function ClipEditor({
               <h2 className="text-lg font-semibold text-zinc-100">Your vertical clip is ready</h2>
               <p className="text-xs text-zinc-500 mt-0.5">9:16 — optimised for TikTok, Reels &amp; Shorts</p>
             </div>
-            <a
-              href={outputUrl}
-              download
-              className="btn-primary flex items-center gap-2 text-sm"
+            <button
+              onClick={handleDownload}
+              disabled={downloading}
+              className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M12 3v13.5m0 0l-4.5-4.5M12 16.5l4.5-4.5" />
               </svg>
-              Download
-            </a>
+              {downloading ? "Downloading…" : "Download"}
+            </button>
           </div>
 
           {/* preview player */}
           <video
-            src={outputUrl}
+            src={liveOutputUrl}
             controls
             playsInline
             className="mx-auto rounded-lg bg-zinc-950 block"
@@ -357,7 +426,7 @@ export default function ClipEditor({
     <div className="space-y-4">
 
       {/* result ready banner — shown when returning to editor after conversion */}
-      {outputUrl && (
+      {liveOutputUrl && (
         <div className="flex items-center justify-between rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3">
           <p className="text-sm text-emerald-400 font-medium">Converted clip is ready</p>
           <button

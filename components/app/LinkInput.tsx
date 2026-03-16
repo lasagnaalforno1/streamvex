@@ -2,26 +2,23 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { detectPlatform, type PlatformInfo } from "@/lib/platform";
+import { detectTwitchClip } from "@/lib/platform";
 
 export default function LinkInput() {
   const router = useRouter();
-  const [url, setUrl]       = useState("");
-  const [error, setError]   = useState("");
+  const [url, setUrl]         = useState("");
+  const [error, setError]     = useState("");
   const [loading, setLoading] = useState(false);
 
   const trimmed = url.trim();
-  const info: PlatformInfo | null = trimmed ? detectPlatform(trimmed) : null;
+  const clip    = trimmed ? detectTwitchClip(trimmed) : null;
+  const isValid = clip !== null;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!trimmed) { setError("Paste a link to get started."); return; }
-    if (!info)    { setError("Only YouTube videos and Twitch clips are supported."); return; }
-    if (info.status === "unsupported") {
-      setError(info.note ?? `${info.displayName} isn't supported yet.`);
-      return;
-    }
+    if (!trimmed) { setError("Paste a Twitch clip link to get started."); return; }
+    if (!isValid) { setError("That doesn't look like a Twitch clip link."); return; }
 
     setError("");
     setLoading(true);
@@ -41,8 +38,6 @@ export default function LinkInput() {
     }
   }
 
-  const badge = getBadge(info);
-
   return (
     <div className="max-w-xl mx-auto">
       <form onSubmit={handleSubmit} className="flex gap-2.5">
@@ -51,7 +46,7 @@ export default function LinkInput() {
             type="url"
             value={url}
             onChange={(e) => { setUrl(e.target.value); if (error) setError(""); }}
-            placeholder="Paste a Twitch, Kick, or YouTube link"
+            placeholder="Paste a Twitch clip link"
             className="w-full px-4 py-3 rounded-xl bg-zinc-800/80 border border-zinc-700/80
                        text-zinc-100 placeholder-zinc-500 text-sm
                        focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent
@@ -61,14 +56,12 @@ export default function LinkInput() {
             disabled={loading}
           />
 
-          {/* Platform badge — appears when a URL is detected */}
-          {badge && (
-            <span
-              className={`absolute right-3 top-1/2 -translate-y-1/2
-                          px-2 py-0.5 rounded-full text-[10px] font-semibold border
-                          pointer-events-none ${badge.className}`}
-            >
-              {badge.label}
+          {/* Twitch badge — shown once a valid clip URL is detected */}
+          {isValid && (
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none
+                             px-2 py-0.5 rounded-full text-[10px] font-semibold border
+                             bg-violet-500/15 text-violet-400 border-violet-500/25">
+              Twitch
             </span>
           )}
         </div>
@@ -95,34 +88,8 @@ export default function LinkInput() {
       </form>
 
       <p className={`text-xs mt-2.5 text-left ${error ? "text-red-400" : "text-zinc-600"}`}>
-        {error || "Supports YouTube videos · YouTube Shorts · Twitch clips"}
+        {error || "Paste a clips.twitch.tv or twitch.tv/…/clip/… link"}
       </p>
     </div>
   );
-}
-
-function getBadge(info: PlatformInfo | null): { label: string; className: string } | null {
-  if (!info) return null;
-
-  if (info.status === "unsupported") {
-    return {
-      label: `${info.displayName} · Soon`,
-      className: "bg-zinc-800 text-zinc-500 border-zinc-700/60",
-    };
-  }
-
-  switch (info.platform) {
-    case "youtube":
-      return {
-        label: info.displayName,
-        className: "bg-red-500/15 text-red-400 border-red-500/25",
-      };
-    case "twitch_clip":
-      return {
-        label: "Twitch",
-        className: "bg-violet-500/15 text-violet-400 border-violet-500/25",
-      };
-    default:
-      return null;
-  }
 }

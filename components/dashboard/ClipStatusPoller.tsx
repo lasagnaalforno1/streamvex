@@ -6,19 +6,21 @@ import type { ClipStatus } from "@/lib/types";
 
 interface Props {
   status: ClipStatus;
-  /** Polling interval in ms. Defaults to 5 000. */
+  /** Polling interval in ms. Defaults to 2 500. */
   intervalMs?: number;
 }
 
 /**
- * Invisible component that polls router.refresh() while the clip is processing.
+ * Invisible component that polls router.refresh() while the clip is in a
+ * transient state (uploading = import in progress, processing = FFmpeg running).
+ * Stops automatically once status becomes "ready" or "error".
  * Drop it anywhere on the clip page — it renders nothing.
  */
-export default function ClipStatusPoller({ status, intervalMs = 5000 }: Props) {
+export default function ClipStatusPoller({ status, intervalMs = 2500 }: Props) {
   const router = useRouter();
 
   useEffect(() => {
-    if (status !== "processing") return;
+    if (status !== "uploading" && status !== "processing") return;
 
     const timer = setInterval(() => {
       router.refresh();

@@ -51,7 +51,7 @@ export default async function ClipPage({ params }: Props) {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Polls router.refresh() every 5 s while processing — renders nothing */}
+      {/* Polls router.refresh() every 2.5 s while uploading/processing — renders nothing */}
       <ClipStatusPoller status={typedClip.status} />
 
       {/* Breadcrumb */}
@@ -75,6 +75,15 @@ export default async function ClipPage({ params }: Props) {
           <p className="text-zinc-500 text-sm">Uploaded {formatDate(typedClip.created_at)}</p>
         </div>
       </div>
+
+      {/* Transient-state banner — shown while import or FFmpeg is running */}
+      {(typedClip.status === "uploading" || typedClip.status === "processing") && (
+        <div className="rounded-lg bg-zinc-800/60 border border-zinc-700/50 px-4 py-3 flex items-center gap-3 text-sm text-zinc-400">
+          <div className="w-3.5 h-3.5 rounded-full border-2 border-zinc-600 border-t-violet-400 animate-spin shrink-0" />
+          {typedClip.status === "uploading" ? "Importing clip…" : "Processing clip…"}
+          <span className="ml-auto text-xs text-zinc-600">Page updates automatically</span>
+        </div>
+      )}
 
       {/* Error banner */}
       {typedClip.status === "error" && typedClip.error_message && (

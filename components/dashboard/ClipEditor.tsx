@@ -2,7 +2,6 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Button from "@/components/ui/Button";
 import type { ClipStatus, EditConfig, LayoutPreset, CropBox } from "@/lib/types";
 import { DEFAULT_EDIT_CONFIG } from "@/lib/types";
 
@@ -11,6 +10,34 @@ import { DEFAULT_EDIT_CONFIG } from "@/lib/types";
 const MAX_TRIM = 300; // 5 min — matches Vercel Pro maxDuration
 const PW = 270;       // preview canvas width  (9:16 ratio)
 const PH = 480;       // preview canvas height
+
+// ─── save status ──────────────────────────────────────────────────────────────
+
+type SaveStatus = "saved" | "saving" | "unsaved" | "error";
+
+function SaveStatusPill({ status, error }: { status: SaveStatus; error: string | null }) {
+  if (status === "saved") return (
+    <span className="flex items-center gap-1 text-xs text-zinc-600">
+      <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+      </svg>
+      Saved
+    </span>
+  );
+  if (status === "saving") return (
+    <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+      <div className="w-3 h-3 rounded-full border border-zinc-600 border-t-zinc-300 animate-spin" />
+      Saving…
+    </span>
+  );
+  if (status === "unsaved") return (
+    <span className="text-xs text-amber-600/80">Unsaved</span>
+  );
+  if (status === "error") return (
+    <span className="text-xs text-red-400" title={error ?? undefined}>Save failed</span>
+  );
+  return null;
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,7 +59,6 @@ function fillRect(
   ctx.drawImage(vid, sx, sy, sw, sh,
     dx + (dw - sw * s) / 2, dy + (dh - sh * s) / 2, sw * s, sh * s);
 }
-
 
 function renderPreview(
   canvas: HTMLCanvasElement,
@@ -56,10 +82,7 @@ function renderPreview(
   const fcSx = fc.x * vw, fcSy = fc.y * vh;
   const fcSw = fc.width * vw, fcSh = fc.height * vh;
 
-  // All three layouts use explicit zone-based rendering.
-  // Zone sizes match the FFmpeg filter proportions exactly.
   if (layout === "split") {
-    // Gameplay: top 60 %, Facecam: bottom 40 %
     const gpH = Math.round(PH * 0.6);
     const fcH = PH - gpH;
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, 0, PW, gpH);
@@ -67,7 +90,6 @@ function renderPreview(
     ctx.fillRect(0, gpH, PW, 2);
     fillRect(ctx, vid, fcSx, fcSy, fcSw, fcSh, 0, gpH + 2, PW, fcH - 2);
   } else if (layout === "fullscreen_facecam_top") {
-    // Facecam: top 35 %, Gameplay: bottom 65 %
     const fcH = Math.round(PH * 0.35);
     const gpH = PH - fcH;
     fillRect(ctx, vid, fcSx, fcSy, fcSw, fcSh, 0, 0, PW, fcH);
@@ -75,7 +97,6 @@ function renderPreview(
     ctx.fillRect(0, fcH, PW, 2);
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, fcH + 2, PW, gpH - 2);
   } else {
-    // fullscreen_facecam_bottom: Gameplay: top 65 %, Facecam: bottom 35 %
     const fcH = Math.round(PH * 0.35);
     const gpH = PH - fcH;
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, 0, PW, gpH);
@@ -121,31 +142,71 @@ export default function ClipEditor({
       trimEnd:   initialTrimEnd   ?? null,
     }
   );
-  const [configSaved,  setConfigSaved]  = useState(true);
-  const [duration,     setDuration]     = useState(initialDuration ?? 0);
-  const [currentTime,  setCurrentTime]  = useState(0);
-  const [metaReady,    setMetaReady]    = useState(false);
-  const [saving,        setSaving]       = useState(false);
+  const [saveStatus,    setSaveStatus]   = useState<SaveStatus>("saved");
   const [saveError,     setSaveError]    = useState<string | null>(null);
+  const [duration,      setDuration]     = useState(initialDuration ?? 0);
+  const [currentTime,   setCurrentTime]  = useState(0);
+  const [metaReady,     setMetaReady]    = useState(false);
   const [processing,    setProcessing]   = useState(status === "processing");
   const [processError,  setProcessError] = useState<string | null>(null);
   const [liveOutputUrl, setLiveOutputUrl] = useState<string | null>(outputUrl);
   const [showResult,    setShowResult]   = useState(!!outputUrl);
   const [downloading,   setDownloading]  = useState(false);
 
-const videoRef          = useRef<HTMLVideoElement>(null);
-const canvasRef         = useRef<HTMLCanvasElement>(null);
-const videoContainerRef = useRef<HTMLDivElement>(null!);
-const railRef           = useRef<HTMLDivElement>(null);
-const previewActive     = useRef(false);
-const configRef         = useRef(config);
-const rafRef            = useRef<number>(0);
-const autoSaveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
-const initializedRef    = useRef(false);
-  
+  const videoRef          = useRef<HTMLVideoElement>(null);
+  const canvasRef         = useRef<HTMLCanvasElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null!);
+  const railRef           = useRef<HTMLDivElement>(null);
+  const previewActive     = useRef(false);
+  const configRef         = useRef(config);
+  const durationRef       = useRef(duration);
+  const rafRef            = useRef<number>(0);
+  const autoSaveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initializedRef    = useRef(false);
+  // Holds the most-current save function so debounce timers never hold stale closures
+  const performSaveRef    = useRef<() => Promise<boolean>>(async () => true);
 
-  // Keep configRef current without restarting the rAF loop
+  // Keep refs current
   useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+
+  // Assign latest performSave on every render
+  performSaveRef.current = async function performSave(): Promise<boolean> {
+    setSaveStatus("saving");
+    setSaveError(null);
+    try {
+      const dur = durationRef.current;
+      const body: EditConfig = {
+        ...configRef.current,
+        trimEnd: configRef.current.trimEnd ?? (dur > 0 ? dur : null),
+      };
+      const res = await fetch(`/api/clips/${clipId}/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to save.");
+      setConfig(body);
+      setSaveStatus("saved");
+      return true;
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Save failed.");
+      setSaveStatus("error");
+      return false;
+    }
+  };
+
+  // Debounced auto-save — fires 800 ms after any config change (skips first render)
+  useEffect(() => {
+    if (!initializedRef.current) { initializedRef.current = true; return; }
+    setSaveStatus("unsaved");
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => { performSaveRef.current(); }, 800);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [config]);
 
   // Canvas preview loop
   useEffect(() => {
@@ -169,7 +230,7 @@ const initializedRef    = useRef(false);
     }
   }, [outputUrl]);
 
-  // Client-side status polling while processing — avoids depending on router.refresh()
+  // Client-side status polling while processing
   useEffect(() => {
     if (!processing) return;
     let cancelled = false;
@@ -188,7 +249,7 @@ const initializedRef    = useRef(false);
           setLiveOutputUrl(json.outputUrl);
           setProcessing(false);
           setShowResult(!!json.outputUrl);
-          router.refresh(); // update header badge / status text on the rest of the page
+          router.refresh();
           return;
         }
         if (json.status === "error") {
@@ -222,7 +283,6 @@ const initializedRef    = useRef(false);
 
   function updateConfig(patch: Partial<EditConfig>) {
     setConfig(prev => ({ ...prev, ...patch }));
-    setConfigSaved(false);
   }
 
   // ── video events ─────────────────────────────────────────────────────────
@@ -288,31 +348,8 @@ const initializedRef    = useRef(false);
     vid.play().catch(() => {});
   }
 
-  async function saveConfig(): Promise<boolean> {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const body: EditConfig = {
-        ...config,
-        // Persist explicit trimEnd so the backend always has a value
-        trimEnd: config.trimEnd ?? (duration > 0 ? duration : null),
-      };
-      const res = await fetch(`/api/clips/${clipId}/config`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json().catch(() => ({})) as { error?: string };
-      if (!res.ok) throw new Error(json.error ?? "Failed to save.");
-      setConfig(body);
-      setConfigSaved(true);
-      return true;
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Save failed.");
-      return false;
-    } finally {
-      setSaving(false);
-    }
+  function resetTrim() {
+    updateConfig({ trimStart: 0, trimEnd: null });
   }
 
   async function handleDownload() {
@@ -330,7 +367,6 @@ const initializedRef    = useRef(false);
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch {
-      // Fallback: open in new tab
       window.open(liveOutputUrl, "_blank");
     } finally {
       setDownloading(false);
@@ -338,12 +374,12 @@ const initializedRef    = useRef(false);
   }
 
   async function handleProcess() {
-    // Clear any stale errors from previous attempts
     setSaveError(null);
     setProcessError(null);
-
-    if (!configSaved) {
-      const ok = await saveConfig();
+    // Flush any pending auto-save first
+    if (saveStatus !== "saved") {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      const ok = await performSaveRef.current();
       if (!ok) return;
     }
     setProcessing(true);
@@ -358,9 +394,8 @@ const initializedRef    = useRef(false);
     }
   }
 
-  // ── render ───────────────────────────────────────────────────────────────
+  // ── processing state ─────────────────────────────────────────────────────
 
-  // ── processing state — shown while FFmpeg runs ────────────────────────
   if (processing) {
     return (
       <div className="glass-card p-16 flex flex-col items-center gap-5 text-center">
@@ -373,12 +408,12 @@ const initializedRef    = useRef(false);
     );
   }
 
-  // ── result state — shown after successful conversion ──────────────────
+  // ── result state ──────────────────────────────────────────────────────────
+
   if (showResult && liveOutputUrl) {
     return (
       <div className="space-y-4">
         <div className="glass-card p-6">
-          {/* header */}
           <div className="flex items-start justify-between mb-6">
             <div>
               <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide mb-1">
@@ -398,8 +433,6 @@ const initializedRef    = useRef(false);
               {downloading ? "Downloading…" : "Download"}
             </button>
           </div>
-
-          {/* preview player */}
           <video
             src={liveOutputUrl}
             controls
@@ -408,8 +441,6 @@ const initializedRef    = useRef(false);
             style={{ aspectRatio: "9/16", maxHeight: 520 }}
           />
         </div>
-
-        {/* edit again */}
         <div className="flex justify-center pb-2">
           <button
             onClick={() => setShowResult(false)}
@@ -425,10 +456,12 @@ const initializedRef    = useRef(false);
     );
   }
 
+  // ── editor ────────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-4">
 
-      {/* result ready banner — shown when returning to editor after conversion */}
+      {/* result ready banner */}
       {liveOutputUrl && (
         <div className="flex items-center justify-between rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3">
           <p className="text-sm text-emerald-400 font-medium">Converted clip is ready</p>
@@ -443,9 +476,7 @@ const initializedRef    = useRef(false);
 
       {/* ── layout selector ── */}
       <div className="glass-card p-4">
-        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">
-          Layout
-        </p>
+        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">Layout</p>
         <div className="flex gap-3">
           {LAYOUTS.map(({ id, label, desc }) => (
             <button
@@ -533,10 +564,23 @@ const initializedRef    = useRef(false);
       {/* ── trim editor ── */}
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-sm font-semibold text-zinc-200">Trim</h2>
-          {metaReady && (
-            <span className="text-xs text-zinc-500 tabular-nums">{fmt(duration)} total</span>
-          )}
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold text-zinc-200">Trim</h2>
+            <SaveStatusPill status={saveStatus} error={saveError} />
+          </div>
+          <div className="flex items-center gap-3">
+            {metaReady && (
+              <span className="text-xs text-zinc-600 tabular-nums">{fmt(duration)} total</span>
+            )}
+            {metaReady && (
+              <button
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                onClick={resetTrim}
+              >
+                Reset trim
+              </button>
+            )}
+          </div>
         </div>
 
         {!metaReady ? (
@@ -549,7 +593,7 @@ const initializedRef    = useRef(false);
             <div className="relative select-none" style={{ height: 44 }}>
               <div
                 ref={railRef}
-                className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-zinc-800 cursor-pointer"
+                className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full bg-zinc-800 cursor-pointer"
                 onClick={onRailClick}
               >
                 <div
@@ -573,37 +617,32 @@ const initializedRef    = useRef(false);
               <TrimHandle pct={endPct}   {...makeHandleProps("end")}   />
             </div>
 
-            {/* time readouts */}
-            <div className="flex items-center justify-between tabular-nums">
-              <div>
-                <p className="text-xs text-zinc-500 mb-0.5">Start</p>
+            {/* time readout tiles */}
+            <div className="flex items-stretch gap-2 tabular-nums">
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <p className="text-xs text-zinc-500 mb-1">Start</p>
                 <p className="text-sm font-mono text-zinc-200">{fmt(trimStart)}</p>
               </div>
-              <div className="text-center">
-                <p className="text-xs text-zinc-500 mb-0.5">Selected</p>
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                <p className="text-xs text-zinc-500 mb-1">Selected</p>
                 <p className={`text-sm font-mono font-semibold ${overLimit ? "text-red-400" : "text-violet-300"}`}>
                   {fmt(trimDuration)}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-zinc-500 mb-0.5">End</p>
+              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-right">
+                <p className="text-xs text-zinc-500 mb-1">End</p>
                 <p className="text-sm font-mono text-zinc-200">{fmt(trimEnd)}</p>
               </div>
             </div>
 
-            {/* status messages */}
+            {/* limit warning */}
             {overLimit && (
               <div className="rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
                 Selection exceeds the 5-minute limit — shorten the clip.
               </div>
             )}
-            {!configSaved && !overLimit && (
-              <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-400">
-                Unsaved changes — save before converting, or convert to save automatically.
-              </div>
-            )}
 
-            {/* trim actions */}
+            {/* preview action */}
             <div className="flex items-center gap-3 pt-1">
               <button
                 className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -614,19 +653,39 @@ const initializedRef    = useRef(false);
                 </svg>
                 Preview segment
               </button>
-              {!configSaved && (
-                <div className="ml-auto">
-                  <Button variant="secondary" size="sm" loading={saving} onClick={() => saveConfig()}>
-                    Save
-                  </Button>
-                </div>
-              )}
             </div>
           </div>
         )}
+      </div>
 
-        {/* errors — always visible regardless of metaReady state */}
-        {saveError && (
+      {/* ── convert CTA ── */}
+      <div className="glass-card p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-zinc-200">Convert to 9:16</p>
+            {metaReady && (
+              <p className="text-xs text-zinc-500 mt-0.5 truncate">
+                {fmt(trimDuration)} selected · {LAYOUTS.find(l => l.id === config.layout)?.label}
+              </p>
+            )}
+          </div>
+          <button
+            disabled={!canProcess}
+            onClick={handleProcess}
+            className={`shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-xl
+                        text-sm font-semibold transition-colors
+                        ${canProcess
+                          ? "bg-violet-600 hover:bg-violet-500 text-white"
+                          : "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                        }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+            </svg>
+            Convert to 9:16
+          </button>
+        </div>
+        {saveError && saveStatus === "error" && (
           <div className="rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400 mt-4">
             Save failed: {saveError}
           </div>
@@ -636,18 +695,6 @@ const initializedRef    = useRef(false);
             Conversion failed: {processError}
           </div>
         )}
-
-        {/* Convert — always visible so users can always find the primary action */}
-        <div className="flex justify-end mt-4 pt-4 border-t border-zinc-800/60">
-          <Button
-            variant="primary"
-            disabled={!canProcess}
-            loading={processing}
-            onClick={handleProcess}
-          >
-            {processing ? "Converting…" : "Convert to 9:16"}
-          </Button>
-        </div>
       </div>
 
     </div>
@@ -655,6 +702,49 @@ const initializedRef    = useRef(false);
 }
 
 // ─── crop overlay ─────────────────────────────────────────────────────────────
+
+type ResizeEdge = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface ResizeState {
+  edge: ResizeEdge;
+  mx: number; my: number;
+  ox: number; oy: number; ow: number; oh: number;
+}
+
+function applyResize(
+  edge: ResizeEdge,
+  dx: number,
+  dy: number,
+  orig: { ox: number; oy: number; ow: number; oh: number },
+): CropBox {
+  const MIN = 0.05;
+  let { ox: x, oy: y, ow: w, oh: h } = orig;
+
+  if (edge === "e" || edge === "ne" || edge === "se")
+    w = Math.max(MIN, Math.min(1 - orig.ox, orig.ow + dx));
+  if (edge === "w" || edge === "nw" || edge === "sw") {
+    const newX = Math.max(0, Math.min(orig.ox + orig.ow - MIN, orig.ox + dx));
+    w = orig.ow + orig.ox - newX; x = newX;
+  }
+  if (edge === "s" || edge === "se" || edge === "sw")
+    h = Math.max(MIN, Math.min(1 - orig.oy, orig.oh + dy));
+  if (edge === "n" || edge === "ne" || edge === "nw") {
+    const newY = Math.max(0, Math.min(orig.oy + orig.oh - MIN, orig.oy + dy));
+    h = orig.oh + orig.oy - newY; y = newY;
+  }
+  return { x, y, width: w, height: h };
+}
+
+const RESIZE_HANDLES: { edge: ResizeEdge; style: React.CSSProperties; cursor: string }[] = [
+  { edge: "nw", cursor: "nwse-resize", style: { top: 0,    left:  "0%",  transform: "translate(-50%, -50%)" } },
+  { edge: "n",  cursor: "ns-resize",   style: { top: 0,    left:  "50%", transform: "translate(-50%, -50%)" } },
+  { edge: "ne", cursor: "nesw-resize", style: { top: 0,    right: 0,     transform: "translate(50%,  -50%)" } },
+  { edge: "e",  cursor: "ew-resize",   style: { top: "50%", right: 0,    transform: "translate(50%,  -50%)" } },
+  { edge: "se", cursor: "nwse-resize", style: { bottom: 0, right: 0,     transform: "translate(50%,   50%)" } },
+  { edge: "s",  cursor: "ns-resize",   style: { bottom: 0, left:  "50%", transform: "translate(-50%,  50%)" } },
+  { edge: "sw", cursor: "nesw-resize", style: { bottom: 0, left:  "0%",  transform: "translate(-50%,  50%)" } },
+  { edge: "w",  cursor: "ew-resize",   style: { top: "50%", left: 0,     transform: "translate(-50%, -50%)" } },
+];
 
 interface CropOverlayProps {
   crop: CropBox;
@@ -665,12 +755,11 @@ interface CropOverlayProps {
 }
 
 function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlayProps) {
-  // Keep a ref so pointer handlers never have stale closures
   const cropRef   = useRef(crop);
   useEffect(() => { cropRef.current = crop; }, [crop]);
 
   const moveRef   = useRef<{ mx: number; my: number; cx: number; cy: number } | null>(null);
-  const resizeRef = useRef<{ mx: number; my: number; cw: number; ch: number } | null>(null);
+  const resizeRef = useRef<ResizeState | null>(null);
 
   function containerSize() {
     const el = containerRef.current;
@@ -705,30 +794,28 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
     moveRef.current = null;
   }
 
-  // ── resize (bottom-right handle) ─────────────────────────────────────────
-  function onResizeDown(e: React.PointerEvent) {
-    e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    resizeRef.current = {
-      mx: e.clientX, my: e.clientY,
-      cw: cropRef.current.width, ch: cropRef.current.height,
+  // ── resize (all 8 edges) ───────────────────────────────────────────────────
+  function makeResizeHandlers(edge: ResizeEdge) {
+    return {
+      onPointerDown(e: React.PointerEvent) {
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        const c = cropRef.current;
+        resizeRef.current = { edge, mx: e.clientX, my: e.clientY, ox: c.x, oy: c.y, ow: c.width, oh: c.height };
+      },
+      onPointerMove(e: React.PointerEvent) {
+        if (!resizeRef.current || resizeRef.current.edge !== edge) return;
+        if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
+        const { w, h } = containerSize();
+        const dx = (e.clientX - resizeRef.current.mx) / w;
+        const dy = (e.clientY - resizeRef.current.my) / h;
+        onChange(applyResize(edge, dx, dy, resizeRef.current));
+      },
+      onPointerUp(e: React.PointerEvent) {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        resizeRef.current = null;
+      },
     };
-  }
-  function onResizeMove(e: React.PointerEvent) {
-    if (!resizeRef.current || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-    const { w, h } = containerSize();
-    const dx = (e.clientX - resizeRef.current.mx) / w;
-    const dy = (e.clientY - resizeRef.current.my) / h;
-    const c  = cropRef.current;
-    onChange({
-      ...c,
-      width:  Math.max(0.1, Math.min(1 - c.x, resizeRef.current.cw + dx)),
-      height: Math.max(0.1, Math.min(1 - c.y, resizeRef.current.ch + dy)),
-    });
-  }
-  function onResizeUp(e: React.PointerEvent) {
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    resizeRef.current = null;
   }
 
   return (
@@ -742,11 +829,10 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
         border:    `2px solid ${color}`,
         boxSizing: "border-box",
         zIndex:    10,
-        // Interior is transparent to pointer events so the video controls work normally.
         pointerEvents: "none",
       }}
     >
-      {/* Label — non-interactive */}
+      {/* Label */}
       <span
         className="absolute -top-5 left-0 text-xs font-semibold px-1.5 py-0.5 rounded text-white whitespace-nowrap select-none"
         style={{ background: color, pointerEvents: "none" }}
@@ -754,7 +840,7 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
         {label}
       </span>
 
-      {/* Move handle — centered, the only interactive drag zone */}
+      {/* Move handle — center */}
       <div
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
                    w-8 h-8 rounded cursor-move touch-none
@@ -768,20 +854,26 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
         onPointerMove={onMoveMove}
         onPointerUp={onMoveUp}
       >
-        {/* four-dot move icon */}
         <svg width="14" height="14" viewBox="0 0 14 14" fill={color} opacity={0.9}>
           <path d="M7 0 5.5 2h3L7 0ZM7 14l1.5-2h-3L7 14ZM0 7l2 1.5V5.5L0 7ZM14 7l-2-1.5v3L14 7ZM6 6h2v2H6V6Z"/>
         </svg>
       </div>
 
-      {/* Resize handle — bottom-right corner */}
-      <div
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize touch-none"
-        style={{ pointerEvents: "auto", background: color }}
-        onPointerDown={onResizeDown}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeUp}
-      />
+      {/* 8 resize handles */}
+      {RESIZE_HANDLES.map(({ edge, style, cursor }) => (
+        <div
+          key={edge}
+          className="absolute w-3 h-3 rounded-sm touch-none"
+          style={{
+            ...style,
+            pointerEvents: "auto",
+            cursor,
+            background: color,
+            boxShadow: "0 0 0 1.5px #09090b",
+          }}
+          {...makeResizeHandlers(edge)}
+        />
+      ))}
     </div>
   );
 }
@@ -793,9 +885,6 @@ function LayoutIcon({ id, active }: { id: LayoutPreset; active: boolean }) {
   const fc = active ? "bg-orange-400/90" : "bg-zinc-500";
   const divider = "bg-zinc-950/60";
 
-  // Thumbnails use accurate zone proportions matching the actual FFmpeg output.
-  // fullscreen_facecam_top:    top 35 % facecam (orange) · bottom 65 % gameplay (violet)
-  // fullscreen_facecam_bottom: top 65 % gameplay (violet) · bottom 35 % facecam (orange)
   if (id === "fullscreen_facecam_top") {
     return (
       <div className="w-7 h-12 rounded overflow-hidden flex flex-col flex-shrink-0">

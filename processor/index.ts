@@ -361,37 +361,109 @@ return res.json({ success: true, outputPath });
 });
 
 // ── yt-dlp import ─────────────────────────────────────────────────────────────
-//
-// Downloads a video URL using yt-dlp, writing the result to outputPath as mp4.
-// Prints the video title to stdout (captured and returned).
-// Uses the ffmpeg-static binary for any muxing yt-dlp needs to do.
 
-async function downloadWithYtDlp(url: string, outputPath: string): Promise<string> {
+// Video extensions yt-dlp may produce (in preference order)
+const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mkv", ".mov", ".m4v"];
+
+/**
+ * Scan a directory for the first non-partial video file yt-dlp may have written.
+ * yt-dlp writes a `.part` file during download and renames it on completion, so
+ * we explicitly skip `.part` files.
+ */
+function findDownloadedFile(dir: string): string | null {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const ext of VIDEO_EXTENSIONS) {
+    const match = entries.find(
+      (f) => f.toLowerCase().endsWith(ext) && !f.toLowerCase().endsWith(".part"),
+    );
+    if (match) return path.join(dir, match);
+  }
+  return null;
+}
+
+/**
+ * Download a URL via yt-dlp into an isolated directory.
+ *
+ * Returns the title (from yt-dlp's --print) and the absolute path of the
+ * downloaded file. The caller is responsible for cleaning up the directory.
+ *
+ * Why a directory instead of a fixed path:
+ *   yt-dlp determines the final extension itself (even when --merge-output-format
+ *   is set it may fall back to webm/mkv if ffmpeg is unavailable or the format
+ *   selector produces a different container). Giving it a directory + template
+ *   prevents a fixed-path mismatch from hiding the real file.
+ */
+async function downloadWithYtDlp(
+  url: string,
+  outputDir: string,
+  jobId: string,
+): Promise<{ title: string; filePath: string }> {
+  // `video.%(ext)s` gives yt-dlp full control over the extension while keeping
+  // the base name predictable for the subsequent directory scan.
+  const outputTemplate = path.join(outputDir, "video.%(ext)s");
+
   const args: string[] = [
     "--no-playlist",
-    // Print title so we can update the clip's title in the DB
+    // Capture the video title so we can update the clip DB row
     "--print", "%(title)s",
-    // Best video up to 720p + best audio, merged to mp4
+    // Prefer best video up to 720p merged with best audio
     "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
     "--merge-output-format", "mp4",
-    "-o", outputPath,
+    "-o", outputTemplate,
     "--no-warnings",
     "--no-progress",
   ];
 
-  // Point yt-dlp at our bundled ffmpeg binary so it can mux video+audio
   if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+    // yt-dlp needs ffmpeg to mux separate video+audio streams
     args.push("--ffmpeg-location", ffmpegStatic);
+    console.log(`[import:${jobId}] ffmpeg-location: ${ffmpegStatic}`);
+  } else {
+    console.warn(`[import:${jobId}] ffmpeg-static not found — merge may produce non-mp4`);
   }
 
   args.push(url);
+  console.log(`[import:${jobId}] yt-dlp command: yt-dlp ${args.join(" ")}`);
 
-  const { stdout } = await execFileAsync("yt-dlp", args, {
-    timeout: 5 * 60 * 1000, // 5-minute ceiling
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  let stdout = "";
+  try {
+    const result = await execFileAsync("yt-dlp", args, {
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    stdout = result.stdout;
+    if (result.stderr?.trim()) {
+      console.log(`[import:${jobId}] yt-dlp stderr: ${result.stderr.trim()}`);
+    }
+  } catch (err) {
+    const execErr = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
+    if (execErr.stderr?.trim()) {
+      console.error(`[import:${jobId}] yt-dlp stderr:\n${execErr.stderr.trim()}`);
+    }
+    throw new Error(`yt-dlp failed: ${execErr.message}`);
+  }
 
-  return stdout.trim().slice(0, 200);
+  // --print outputs the title as the first line of stdout
+  const title = (stdout.trim().split("\n")[0] ?? "").slice(0, 200);
+
+  // Log what yt-dlp actually wrote so failures are easy to diagnose
+  const dirEntries = fs.readdirSync(outputDir);
+  console.log(`[import:${jobId}] files in download dir: [${dirEntries.join(", ") || "(empty)"}]`);
+
+  const filePath = findDownloadedFile(outputDir);
+  if (!filePath) {
+    throw new Error(
+      `yt-dlp finished but no video file found. Dir contents: [${dirEntries.join(", ")}]`,
+    );
+  }
+
+  console.log(`[import:${jobId}] resolved download file: ${filePath}`);
+  return { title, filePath };
 }
 
 app.post("/import", requireSecret, async (req: Request, res: Response) => {
@@ -410,24 +482,23 @@ app.post("/import", requireSecret, async (req: Request, res: Response) => {
   console.log(`\n[import:${clipId}] ── request received ──`);
   console.log(`[import:${clipId}] url=${url}`);
 
-  // Acknowledge immediately — the actual download runs in the background.
-  // The clip's status poller on the client will pick up the DB change when done.
+  // Acknowledge immediately — download runs in the background.
+  // The clip-page status poller picks up the DB update when the processor finishes.
   res.json({ ok: true, clipId });
 
-  const supabase  = getServiceClient();
-  const tmpPath   = path.join(os.tmpdir(), `streamvex_import_${clipId}.mp4`);
+  const supabase = getServiceClient();
+  // Isolated per-job directory so yt-dlp's output files never collide
+  const tmpDir = path.join(os.tmpdir(), `streamvex_import_${clipId}`);
 
   (async () => {
     try {
-      console.log(`[import:${clipId}] starting yt-dlp download…`);
-      const title = await downloadWithYtDlp(url, tmpPath);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      console.log(`[import:${clipId}] tmp dir: ${tmpDir}`);
+
+      const { title, filePath } = await downloadWithYtDlp(url, tmpDir, clipId);
       console.log(`[import:${clipId}] download complete — title="${title}"`);
 
-      if (!fs.existsSync(tmpPath)) {
-        throw new Error("yt-dlp completed but output file not found.");
-      }
-
-      const buffer   = fs.readFileSync(tmpPath);
+      const buffer   = fs.readFileSync(filePath);
       const fileSize = buffer.length;
       console.log(`[import:${clipId}] file size: ${fileSize} bytes`);
 
@@ -440,9 +511,9 @@ app.post("/import", requireSecret, async (req: Request, res: Response) => {
       console.log(`[import:${clipId}] uploaded to storage: ${inputPath}`);
 
       const updates: Record<string, unknown> = {
-        status:     "ready",
-        input_path: inputPath,
-        file_size:  fileSize,
+        status:        "ready",
+        input_path:    inputPath,
+        file_size:     fileSize,
         error_message: null,
       };
       if (title) updates.title = title;
@@ -458,7 +529,7 @@ app.post("/import", requireSecret, async (req: Request, res: Response) => {
         .eq("id", clipId);
     } finally {
       try {
-        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch {}
     }
   })();

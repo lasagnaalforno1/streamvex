@@ -41,6 +41,18 @@ function SaveStatusPill({ status, error }: { status: SaveStatus; error: string |
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Produce a stable JSON snapshot of a config for equality comparison.
+ * Normalises trimEnd: null → duration so a null trimEnd and an explicit
+ * trimEnd equal to duration are treated as the same saved state.
+ */
+function configSnapshot(cfg: EditConfig, dur: number): string {
+  return JSON.stringify({
+    ...cfg,
+    trimEnd: cfg.trimEnd ?? (dur > 0 ? dur : null),
+  });
+}
+
 function fmt(s: number): string {
   const m   = Math.floor(s / 60);
   const sec = (s % 60).toFixed(1).padStart(4, "0");
@@ -165,6 +177,15 @@ export default function ClipEditor({
   const initializedRef    = useRef(false);
   // Holds the most-current save function so debounce timers never hold stale closures
   const performSaveRef    = useRef<() => Promise<boolean>>(async () => true);
+  // Snapshot of the config that is currently persisted on the server.
+  // Compared (normalised) against live config to detect real changes and
+  // break the setConfig → effect → save → setConfig loop.
+  const savedSnapshotRef  = useRef<string>(
+    configSnapshot(
+      initialConfig ?? { ...DEFAULT_EDIT_CONFIG, trimStart: initialTrimStart ?? 0, trimEnd: initialTrimEnd ?? null },
+      initialDuration ?? 0,
+    )
+  );
 
   // Keep refs current
   useEffect(() => { configRef.current = config; }, [config]);
@@ -187,7 +208,7 @@ export default function ClipEditor({
       });
       const json = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(json.error ?? "Failed to save.");
-      setConfig(body);
+      savedSnapshotRef.current = JSON.stringify(body);
       setSaveStatus("saved");
       return true;
     } catch (err) {
@@ -197,9 +218,12 @@ export default function ClipEditor({
     }
   };
 
-  // Debounced auto-save — fires 800 ms after any config change (skips first render)
+  // Debounced auto-save — fires 800 ms after any real config change.
+  // Guards: skips the first render; skips if the normalised config already
+  // matches what is on the server (prevents the save→setConfig→effect loop).
   useEffect(() => {
     if (!initializedRef.current) { initializedRef.current = true; return; }
+    if (configSnapshot(config, durationRef.current) === savedSnapshotRef.current) return;
     setSaveStatus("unsaved");
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => { performSaveRef.current(); }, 800);
@@ -284,6 +308,14 @@ export default function ClipEditor({
   function updateConfig(patch: Partial<EditConfig>) {
     setConfig(prev => ({ ...prev, ...patch }));
   }
+
+  // Seek video to trimStart when the start handle is dragged, so the user
+  // always sees the frame at the beginning of their selected segment.
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid || !metaReady || previewActive.current) return;
+    vid.currentTime = config.trimStart;
+  }, [config.trimStart, metaReady]);
 
   // ── video events ─────────────────────────────────────────────────────────
 

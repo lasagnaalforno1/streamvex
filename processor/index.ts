@@ -409,8 +409,11 @@ async function downloadWithYtDlp(
 
   const args: string[] = [
     "--no-playlist",
-    // Capture the video title so we can update the clip DB row
+    // Capture the video title so we can update the clip DB row.
+    // IMPORTANT: --print implies --simulate in yt-dlp; --no-simulate overrides that
+    // so the file is actually downloaded while still printing the title to stdout.
     "--print", "%(title)s",
+    "--no-simulate",
     // Prefer best video up to 720p merged with best audio
     "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
     "--merge-output-format", "mp4",

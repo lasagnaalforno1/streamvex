@@ -330,9 +330,22 @@ export default function ClipEditor({
     const vid = videoRef.current;
     if (!vid) return;
     setCurrentTime(vid.currentTime);
-    if (previewActive.current && vid.currentTime >= trimEnd) {
+    // Enforce trim end for ALL playback, not just the preview button.
+    if (!vid.paused && vid.currentTime >= trimEnd) {
       vid.pause();
+      vid.currentTime = trimEnd;
       previewActive.current = false;
+    }
+  }
+
+  // When play starts (via native controls or previewSegment), if the playhead
+  // is outside the selected range, snap it to trimStart so playback always
+  // covers the chosen segment.
+  function onPlay() {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (vid.currentTime < trimStart || vid.currentTime >= trimEnd) {
+      vid.currentTime = trimStart;
     }
   }
 
@@ -550,6 +563,7 @@ export default function ClipEditor({
               preload="metadata"
               onLoadedMetadata={onLoadedMetadata}
               onTimeUpdate={onTimeUpdate}
+              onPlay={onPlay}
               className="absolute inset-0 w-full h-full rounded-lg bg-zinc-950 object-contain"
             />
             {metaReady && (

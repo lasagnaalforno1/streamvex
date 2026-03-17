@@ -12,12 +12,18 @@ export interface CropBox {
   height: number; // 0–1
 }
 
+export interface ClipSegment {
+  start: number; // seconds, inclusive
+  end: number;   // seconds, exclusive
+}
+
 export interface EditConfig {
   trimStart: number;
   trimEnd: number | null;  // null = use full clip duration
   layout: LayoutPreset;
   gameplayCrop: CropBox;
   facecamCrop: CropBox;
+  segments?: ClipSegment[]; // optional — when set, overrides trimStart/trimEnd for export
 }
 
 export const DEFAULT_EDIT_CONFIG: EditConfig = {

@@ -24,12 +24,18 @@ interface CropBox {
   height: number;
 }
 
+interface ClipSegment {
+  start: number;
+  end: number;
+}
+
 interface EditConfig {
   layout: LayoutPreset;
   gameplayCrop: CropBox;
   facecamCrop: CropBox;
   trimStart: number;
   trimEnd: number | null;
+  segments?: ClipSegment[];
 }
 
 const DEFAULT_EDIT_CONFIG: EditConfig = {
@@ -115,6 +121,66 @@ function buildFilterComplex(config: EditConfig): string {
   ].join(";");
 }
 
+/**
+ * Build a filter_complex that trims + concatenates the given segments from the
+ * single input file, then applies the layout/crop filter to the result.
+ *
+ * Audio is included via atrim — if the source has no audio track FFmpeg will
+ * error; this is acceptable for the V1 feature (gaming clips always have audio).
+ *
+ * The [0:v] input can be referenced multiple times in filter_complex (FFmpeg
+ * auto-inserts a split). The concatenated video stream [cv] is a filter output
+ * and MUST be explicitly split before dual use in gameplay + facecam crops.
+ */
+function buildSegmentsFilterComplex(
+  segs: ClipSegment[],
+  config: EditConfig,
+): { filterComplex: string; videoMap: string; audioMap: string } {
+  const N = segs.length;
+  const { gameplayCrop: gp, facecamCrop: fc, layout } = config;
+  const gpExpr = cropExpr(gp);
+  const fcExpr = cropExpr(fc);
+  const FC_H = 448, GP_H = 832;
+
+  const parts: string[] = [];
+
+  // Trim each segment — video + audio
+  segs.forEach((s, i) => {
+    parts.push(`[0:v]trim=start=${s.start}:end=${s.end},setpts=PTS-STARTPTS[sv${i}]`);
+    parts.push(`[0:a]atrim=start=${s.start}:end=${s.end},asetpts=PTS-STARTPTS[sa${i}]`);
+  });
+
+  // Concat all segments into [cv] (video) and [ca] (audio)
+  const vList = segs.map((_, i) => `[sv${i}]`).join("");
+  const aList = segs.map((_, i) => `[sa${i}]`).join("");
+  parts.push(`${vList}${aList}concat=n=${N}:v=1:a=1[cv][ca]`);
+
+  // Split [cv] so it can be referenced twice (gameplay crop + facecam crop)
+  parts.push(`[cv]split[cv1][cv2]`);
+
+  // Apply layout
+  if (layout === "split") {
+    parts.push(`[cv1]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`);
+    parts.push(`[cv2]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`);
+    parts.push(`[gp][fc]vstack[out]`);
+  } else if (layout === "fullscreen_facecam_top") {
+    parts.push(`[cv1]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
+    parts.push(`[cv2]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
+    parts.push(`[fc][gp]vstack[out]`);
+  } else {
+    // fullscreen_facecam_bottom
+    parts.push(`[cv1]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
+    parts.push(`[cv2]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
+    parts.push(`[gp][fc]vstack[out]`);
+  }
+
+  return {
+    filterComplex: parts.join(";"),
+    videoMap: "[out]",
+    audioMap: "[ca]",
+  };
+}
+
 function processVideo(
   inputBuffer: Buffer,
   jobId: string,
@@ -128,14 +194,31 @@ function processVideo(
     console.log(`[ffmpeg:${jobId}] writing ${inputBuffer.length} bytes → ${inputPath}`);
     fs.writeFileSync(inputPath, inputBuffer);
 
-    const filterComplex = buildFilterComplex(config);
+    const segs = config.segments;
+    const hasSegments = Array.isArray(segs) && segs.length > 0;
+
+    let filterComplex: string;
+    let videoMap = "[out]";
+    let audioMap = "0:a?";
+
+    if (hasSegments) {
+      const result = buildSegmentsFilterComplex(segs!, config);
+      filterComplex = result.filterComplex;
+      videoMap = result.videoMap;
+      audioMap = result.audioMap;
+      console.log(`[ffmpeg:${jobId}] segments mode — ${segs!.length} segment(s)`);
+    } else {
+      filterComplex = buildFilterComplex(config);
+    }
     console.log(`[ffmpeg:${jobId}] layout=${config.layout}`);
     console.log(`[ffmpeg:${jobId}] filter_complex=${filterComplex}`);
 
     const inputOptions: string[] = [];
-    if (config.trimStart > 0) inputOptions.push("-ss", String(config.trimStart));
-    if (config.trimEnd !== null && config.trimEnd > config.trimStart) {
-      inputOptions.push("-t", String(config.trimEnd - config.trimStart));
+    if (!hasSegments) {
+      if (config.trimStart > 0) inputOptions.push("-ss", String(config.trimStart));
+      if (config.trimEnd !== null && config.trimEnd > config.trimStart) {
+        inputOptions.push("-t", String(config.trimEnd - config.trimStart));
+      }
     }
     console.log(`[ffmpeg:${jobId}] inputOptions=${inputOptions.join(" ") || "(none)"}`);
 
@@ -147,8 +230,8 @@ function processVideo(
     cmd
       .outputOptions([
   "-filter_complex", filterComplex,
-  "-map", "[out]",
-  "-map", "0:a?",
+  "-map", videoMap,
+  "-map", audioMap,
   "-r", "30",
   "-c:v", "libx264",
   "-preset", "ultrafast",

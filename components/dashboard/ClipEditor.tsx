@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import type { ClipStatus, EditConfig, LayoutPreset, CropBox } from "@/lib/types";
+import type { ClipStatus, EditConfig, LayoutPreset, CropBox, ClipSegment } from "@/lib/types";
 import { DEFAULT_EDIT_CONFIG } from "@/lib/types";
 
 // ─── constants ────────────────────────────────────────────────────────────────
@@ -42,15 +42,40 @@ function SaveStatusPill({ status, error }: { status: SaveStatus; error: string |
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Produce a stable JSON snapshot of a config for equality comparison.
- * Normalises trimEnd: null → duration so a null trimEnd and an explicit
- * trimEnd equal to duration are treated as the same saved state.
+ * Sort, clamp, merge, and drop tiny segments.
+ * Called before any `updateConfig({ segments })` so the saved value is always clean.
+ */
+function normalizeSegments(segs: ClipSegment[], dur: number): ClipSegment[] {
+  return segs
+    .map(s => ({ start: Math.max(0, s.start), end: Math.min(dur > 0 ? dur : s.end, s.end) }))
+    .filter(s => s.end - s.start >= 0.1)
+    .sort((a, b) => a.start - b.start)
+    .reduce<ClipSegment[]>((acc, seg) => {
+      const last = acc[acc.length - 1];
+      if (last && seg.start <= last.end) {
+        last.end = Math.max(last.end, seg.end);
+      } else {
+        acc.push({ ...seg });
+      }
+      return acc;
+    }, []);
+}
+
+/**
+ * Canonical snapshot of an EditConfig for equality comparison.
+ * Keys are emitted in a fixed order so JSON.stringify is deterministic.
+ * Segments are omitted when absent or empty.
  */
 function configSnapshot(cfg: EditConfig, dur: number): string {
-  return JSON.stringify({
-    ...cfg,
-    trimEnd: cfg.trimEnd ?? (dur > 0 ? dur : null),
-  });
+  const snap: Record<string, unknown> = {
+    layout:       cfg.layout,
+    gameplayCrop: cfg.gameplayCrop,
+    facecamCrop:  cfg.facecamCrop,
+    trimStart:    cfg.trimStart,
+    trimEnd:      cfg.trimEnd ?? (dur > 0 ? dur : null),
+  };
+  if (cfg.segments && cfg.segments.length > 0) snap.segments = cfg.segments;
+  return JSON.stringify(snap);
 }
 
 function fmt(s: number): string {
@@ -197,10 +222,16 @@ export default function ClipEditor({
     setSaveError(null);
     try {
       const dur = durationRef.current;
+      const cfg = configRef.current;
+      // Build body with explicit key order (must match configSnapshot)
       const body: EditConfig = {
-        ...configRef.current,
-        trimEnd: configRef.current.trimEnd ?? (dur > 0 ? dur : null),
+        layout:       cfg.layout,
+        gameplayCrop: cfg.gameplayCrop,
+        facecamCrop:  cfg.facecamCrop,
+        trimStart:    cfg.trimStart,
+        trimEnd:      cfg.trimEnd ?? (dur > 0 ? dur : null),
       };
+      if (cfg.segments && cfg.segments.length > 0) body.segments = cfg.segments;
       const res = await fetch(`/api/clips/${clipId}/config`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -208,7 +239,7 @@ export default function ClipEditor({
       });
       const json = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(json.error ?? "Failed to save.");
-      savedSnapshotRef.current = JSON.stringify(body);
+      savedSnapshotRef.current = configSnapshot(body, dur);
       setSaveStatus("saved");
       return true;
     } catch (err) {
@@ -299,14 +330,60 @@ export default function ClipEditor({
   const trimStart    = config.trimStart;
   const trimEnd      = config.trimEnd ?? duration;
   const trimDuration = Math.max(0, trimEnd - trimStart);
-  const overLimit    = trimDuration > MAX_TRIM;
+
+  const segs         = config.segments;
+  const hasSegments  = !!(segs && segs.length > 0);
+  const totalDuration = hasSegments
+    ? segs!.reduce((acc, s) => acc + (s.end - s.start), 0)
+    : trimDuration;
+
+  const overLimit    = totalDuration > MAX_TRIM;
   const startPct     = duration > 0 ? (trimStart   / duration) * 100 : 0;
   const endPct       = duration > 0 ? (trimEnd     / duration) * 100 : 100;
   const playheadPct  = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const canProcess   = metaReady && trimDuration > 0 && !overLimit && !processing;
+  const canProcess   = metaReady && totalDuration > 0 && !overLimit && !processing;
+
+  // Whether the playhead is inside a cuttable position (not within 0.1s of a boundary)
+  const canSplit = hasSegments && !!(segs!.find(
+    s => currentTime > s.start + 0.1 && currentTime < s.end - 0.1,
+  ));
 
   function updateConfig(patch: Partial<EditConfig>) {
     setConfig(prev => ({ ...prev, ...patch }));
+  }
+
+  // ── segment actions ───────────────────────────────────────────────────────
+
+  function initSegments() {
+    // Convert current trim range into a single segment so the user can split from there
+    updateConfig({ segments: [{ start: trimStart, end: trimEnd }] });
+  }
+
+  function splitAtPlayhead() {
+    const t = videoRef.current?.currentTime ?? currentTime;
+    if (!segs) return;
+    const idx = segs.findIndex(s => t > s.start + 0.1 && t < s.end - 0.1);
+    if (idx === -1) return;
+    const seg = segs[idx];
+    const newSegs = normalizeSegments(
+      [...segs.slice(0, idx), { start: seg.start, end: t }, { start: t, end: seg.end }, ...segs.slice(idx + 1)],
+      duration,
+    );
+    updateConfig({ segments: newSegs });
+  }
+
+  function removeSegment(idx: number) {
+    if (!segs) return;
+    const newSegs = segs.filter((_, i) => i !== idx);
+    if (newSegs.length === 0) {
+      updateConfig({ segments: undefined });
+    } else {
+      updateConfig({ segments: normalizeSegments(newSegs, duration) });
+    }
+  }
+
+  function clearSegments() {
+    updateConfig({ segments: undefined });
   }
 
   // Seek video to trimStart when the start handle is dragged, so the user
@@ -330,22 +407,48 @@ export default function ClipEditor({
     const vid = videoRef.current;
     if (!vid) return;
     setCurrentTime(vid.currentTime);
-    // Enforce trim end for ALL playback, not just the preview button.
-    if (!vid.paused && vid.currentTime >= trimEnd) {
-      vid.pause();
-      vid.currentTime = trimEnd;
-      previewActive.current = false;
+
+    if (vid.paused) return;
+
+    const activeSeg = configRef.current.segments;
+    if (activeSeg && activeSeg.length > 0) {
+      const t = vid.currentTime;
+      // Are we inside any kept segment?
+      const inSeg = activeSeg.some(s => t >= s.start && t < s.end);
+      if (!inSeg) {
+        // Find the next segment ahead of the current position
+        const next = activeSeg.find(s => s.start > t);
+        if (next) {
+          vid.currentTime = next.start;
+        } else {
+          // Past all segments — pause at end of last segment
+          vid.pause();
+          vid.currentTime = activeSeg[activeSeg.length - 1].end;
+          previewActive.current = false;
+        }
+      }
+    } else {
+      // Trim mode: enforce trimEnd
+      if (vid.currentTime >= trimEnd) {
+        vid.pause();
+        vid.currentTime = trimEnd;
+        previewActive.current = false;
+      }
     }
   }
 
-  // When play starts (via native controls or previewSegment), if the playhead
-  // is outside the selected range, snap it to trimStart so playback always
-  // covers the chosen segment.
+  // When play starts, if the playhead is outside the active range, snap to the start.
   function onPlay() {
     const vid = videoRef.current;
     if (!vid) return;
-    if (vid.currentTime < trimStart || vid.currentTime >= trimEnd) {
-      vid.currentTime = trimStart;
+    const activeSeg = configRef.current.segments;
+    if (activeSeg && activeSeg.length > 0) {
+      const inSeg = activeSeg.some(s => vid.currentTime >= s.start && vid.currentTime < s.end);
+      if (!inSeg) vid.currentTime = activeSeg[0].start;
+    } else {
+      if (vid.currentTime < trimStart || vid.currentTime >= trimEnd) {
+        vid.currentTime = trimStart;
+      }
     }
   }
 
@@ -389,7 +492,8 @@ export default function ClipEditor({
     const vid = videoRef.current;
     if (!vid || !metaReady) return;
     previewActive.current = true;
-    vid.currentTime = trimStart;
+    const activeSeg = config.segments;
+    vid.currentTime = (activeSeg && activeSeg.length > 0) ? activeSeg[0].start : trimStart;
     vid.play().catch(() => {});
   }
 
@@ -607,23 +711,31 @@ export default function ClipEditor({
         </div>
       </div>
 
-      {/* ── trim editor ── */}
+      {/* ── trim & cuts editor ── */}
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-zinc-200">Trim</h2>
+            <h2 className="text-sm font-semibold text-zinc-200">Trim &amp; Cuts</h2>
             <SaveStatusPill status={saveStatus} error={saveError} />
           </div>
           <div className="flex items-center gap-3">
             {metaReady && (
               <span className="text-xs text-zinc-600 tabular-nums">{fmt(duration)} total</span>
             )}
-            {metaReady && (
+            {metaReady && !hasSegments && (
               <button
                 className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
                 onClick={resetTrim}
               >
                 Reset trim
+              </button>
+            )}
+            {metaReady && hasSegments && (
+              <button
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                onClick={clearSegments}
+              >
+                Clear cuts
               </button>
             )}
           </div>
@@ -635,51 +747,106 @@ export default function ClipEditor({
           </p>
         ) : (
           <div className="space-y-4">
-            {/* timeline rail */}
+            {/* timeline rail — segments mode shows coloured bars; trim mode shows handles */}
             <div className="relative select-none" style={{ height: 44 }}>
               <div
                 ref={railRef}
                 className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full bg-zinc-800 cursor-pointer"
                 onClick={onRailClick}
               >
-                <div
-                  className="absolute top-0 h-full rounded-l-full bg-zinc-700/50"
-                  style={{ width: `${startPct}%` }}
-                />
-                <div
-                  className={`absolute top-0 h-full ${overLimit ? "bg-red-500/70" : "bg-violet-500/80"}`}
-                  style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
-                />
-                <div
-                  className="absolute top-0 h-full rounded-r-full bg-zinc-700/50"
-                  style={{ left: `${endPct}%`, right: 0 }}
-                />
+                {hasSegments ? (
+                  /* Segment bars */
+                  (segs ?? []).map((seg, i) => {
+                    const sLeft  = duration > 0 ? (seg.start / duration) * 100 : 0;
+                    const sWidth = duration > 0 ? ((seg.end - seg.start) / duration) * 100 : 0;
+                    return (
+                      <div
+                        key={i}
+                        className={`absolute top-0 h-full ${overLimit ? "bg-red-500/70" : "bg-violet-500/80"}`}
+                        style={{ left: `${sLeft}%`, width: `${sWidth}%` }}
+                      />
+                    );
+                  })
+                ) : (
+                  /* Trim-mode shading */
+                  <>
+                    <div
+                      className="absolute top-0 h-full rounded-l-full bg-zinc-700/50"
+                      style={{ width: `${startPct}%` }}
+                    />
+                    <div
+                      className={`absolute top-0 h-full ${overLimit ? "bg-red-500/70" : "bg-violet-500/80"}`}
+                      style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
+                    />
+                    <div
+                      className="absolute top-0 h-full rounded-r-full bg-zinc-700/50"
+                      style={{ left: `${endPct}%`, right: 0 }}
+                    />
+                  </>
+                )}
+                {/* Playhead */}
                 <div
                   className="absolute top-1/2 -translate-y-1/2 w-px h-3 bg-white/50 pointer-events-none"
                   style={{ left: `${playheadPct}%` }}
                 />
               </div>
-              <TrimHandle pct={startPct} {...makeHandleProps("start")} />
-              <TrimHandle pct={endPct}   {...makeHandleProps("end")}   />
+              {!hasSegments && (
+                <>
+                  <TrimHandle pct={startPct} {...makeHandleProps("start")} />
+                  <TrimHandle pct={endPct}   {...makeHandleProps("end")}   />
+                </>
+              )}
             </div>
 
             {/* time readout tiles */}
-            <div className="flex items-stretch gap-2 tabular-nums">
-              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-                <p className="text-xs text-zinc-500 mb-1">Start</p>
-                <p className="text-sm font-mono text-zinc-200">{fmt(trimStart)}</p>
+            {!hasSegments && (
+              <div className="flex items-stretch gap-2 tabular-nums">
+                <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                  <p className="text-xs text-zinc-500 mb-1">Start</p>
+                  <p className="text-sm font-mono text-zinc-200">{fmt(trimStart)}</p>
+                </div>
+                <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
+                  <p className="text-xs text-zinc-500 mb-1">Selected</p>
+                  <p className={`text-sm font-mono font-semibold ${overLimit ? "text-red-400" : "text-violet-300"}`}>
+                    {fmt(trimDuration)}
+                  </p>
+                </div>
+                <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-right">
+                  <p className="text-xs text-zinc-500 mb-1">End</p>
+                  <p className="text-sm font-mono text-zinc-200">{fmt(trimEnd)}</p>
+                </div>
               </div>
-              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-center">
-                <p className="text-xs text-zinc-500 mb-1">Selected</p>
-                <p className={`text-sm font-mono font-semibold ${overLimit ? "text-red-400" : "text-violet-300"}`}>
-                  {fmt(trimDuration)}
-                </p>
+            )}
+
+            {/* segments list */}
+            {hasSegments && (
+              <div className="space-y-1.5">
+                {(segs ?? []).map((seg, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
+                  >
+                    <span className="text-xs text-zinc-500 w-4 tabular-nums">{i + 1}</span>
+                    <span className="text-xs font-mono text-zinc-300 flex-1 tabular-nums">
+                      {fmt(seg.start)} → {fmt(seg.end)}
+                      <span className="text-zinc-600 ml-2">({fmt(seg.end - seg.start)})</span>
+                    </span>
+                    <button
+                      onClick={() => removeSegment(i)}
+                      className="text-xs text-zinc-600 hover:text-red-400 transition-colors shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-right">
+                  <span className="text-xs text-zinc-500">Total: </span>
+                  <span className={`text-xs font-mono font-semibold ${overLimit ? "text-red-400" : "text-violet-300"}`}>
+                    {fmt(totalDuration)}
+                  </span>
+                </div>
               </div>
-              <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-right">
-                <p className="text-xs text-zinc-500 mb-1">End</p>
-                <p className="text-sm font-mono text-zinc-200">{fmt(trimEnd)}</p>
-              </div>
-            </div>
+            )}
 
             {/* limit warning */}
             {overLimit && (
@@ -688,8 +855,8 @@ export default function ClipEditor({
               </div>
             )}
 
-            {/* preview action */}
-            <div className="flex items-center gap-3 pt-1">
+            {/* actions row */}
+            <div className="flex items-center gap-4 pt-1">
               <button
                 className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
                 onClick={previewSegment}
@@ -697,8 +864,33 @@ export default function ClipEditor({
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
                 </svg>
-                Preview segment
+                Preview
               </button>
+
+              {!hasSegments && (
+                <button
+                  className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                  onClick={initSegments}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                  </svg>
+                  Add cuts
+                </button>
+              )}
+
+              {hasSegments && (
+                <button
+                  disabled={!canSplit}
+                  className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={splitAtPlayhead}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                  </svg>
+                  Split here
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -711,7 +903,7 @@ export default function ClipEditor({
             <p className="text-sm font-semibold text-zinc-200">Convert to 9:16</p>
             {metaReady && (
               <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                {fmt(trimDuration)} selected · {LAYOUTS.find(l => l.id === config.layout)?.label}
+                {fmt(totalDuration)} selected{hasSegments ? ` · ${(segs ?? []).length} segment${(segs ?? []).length !== 1 ? "s" : ""}` : ""} · {LAYOUTS.find(l => l.id === config.layout)?.label}
               </p>
             )}
           </div>

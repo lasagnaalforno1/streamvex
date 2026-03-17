@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import type { EditConfig, LayoutPreset, CropBox } from "@/lib/types";
+import type { EditConfig, LayoutPreset, CropBox, ClipSegment } from "@/lib/types";
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -11,6 +11,20 @@ const VALID_LAYOUTS: LayoutPreset[] = [
   "fullscreen_facecam_bottom",
   "split",
 ];
+
+function isValidSegments(v: unknown): v is ClipSegment[] {
+  if (!Array.isArray(v)) return false;
+  if (v.length === 0) return true;
+  return v.every(
+    (s) =>
+      s !== null &&
+      typeof s === "object" &&
+      typeof (s as Record<string, unknown>).start === "number" &&
+      typeof (s as Record<string, unknown>).end   === "number" &&
+      (s as ClipSegment).start >= 0 &&
+      (s as ClipSegment).end > (s as ClipSegment).start,
+  );
+}
 
 function isValidCrop(v: unknown): v is CropBox {
   if (!v || typeof v !== "object") return false;
@@ -56,6 +70,9 @@ export async function PATCH(request: Request, { params }: Params) {
   if (!isValidCrop(b.facecamCrop)) {
     return NextResponse.json({ error: "Invalid facecamCrop." }, { status: 400 });
   }
+  if (b.segments !== undefined && !isValidSegments(b.segments)) {
+    return NextResponse.json({ error: "Invalid segments." }, { status: 400 });
+  }
 
   // Verify ownership
   const { data: clip } = await supabase
@@ -74,6 +91,12 @@ export async function PATCH(request: Request, { params }: Params) {
     gameplayCrop: b.gameplayCrop as CropBox,
     facecamCrop:  b.facecamCrop  as CropBox,
   };
+
+  // Only include segments when present and non-empty
+  const rawSegments = b.segments as ClipSegment[] | undefined;
+  if (rawSegments && rawSegments.length > 0) {
+    editConfig.segments = rawSegments;
+  }
 
   const serviceClient = await createServiceClient();
   const { error: updateError } = await serviceClient

@@ -45,6 +45,12 @@ export default async function DashboardLayout({
             >
               Dashboard
             </Link>
+            <Link
+              href="/settings"
+              className="px-3 py-1.5 rounded-md text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+            >
+              Settings
+            </Link>
           </nav>
 
           {/* User menu */}

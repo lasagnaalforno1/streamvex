@@ -11,6 +11,7 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
 
   const displayName = (user.user_metadata?.display_name as string) ?? "";
+  const plan = (user.user_metadata?.plan as "free" | "pro") ?? "free";
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -20,7 +21,7 @@ export default async function SettingsPage() {
           Manage your account, preferences, and subscription.
         </p>
       </div>
-      <SettingsTabs email={user.email ?? ""} displayName={displayName} />
+      <SettingsTabs email={user.email ?? ""} displayName={displayName} plan={plan} />
     </div>
   );
 }

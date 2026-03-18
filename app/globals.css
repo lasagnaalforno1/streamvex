@@ -81,3 +81,81 @@
     @apply block text-sm font-medium text-zinc-300 mb-1.5;
   }
 }
+
+/* ── Light theme ──────────────────────────────────────────────────────────── */
+
+html.light body {
+  background-color: #f8fafc;
+  background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139, 92, 246, 0.07) 0%, transparent 60%);
+  color: #18181b;
+}
+
+html.light .glass-card {
+  background-color: rgba(255, 255, 255, 0.88);
+  border-color: rgba(0, 0, 0, 0.07);
+}
+
+html.light .input-field {
+  background-color: rgba(255, 255, 255, 0.95);
+  border-color: #d4d4d8;
+  color: #18181b;
+}
+
+html.light .input-field::placeholder { color: #a1a1aa; }
+
+html.light .btn-secondary {
+  background-color: #ffffff;
+  color: #18181b;
+  border-color: #d4d4d8;
+}
+
+html.light .btn-secondary:hover {
+  background-color: #f4f4f5;
+  border-color: #a1a1aa;
+}
+
+html.light .btn-outline {
+  color: #7c3aed;
+  border-color: rgba(124, 58, 237, 0.5);
+}
+
+/* Text colour overrides */
+html.light .text-zinc-50,
+html.light .text-zinc-100 { color: #18181b; }
+html.light .text-zinc-200,
+html.light .text-zinc-300 { color: #3f3f46; }
+html.light .text-zinc-400 { color: #71717a; }
+html.light .text-zinc-500 { color: #a1a1aa; }
+html.light .text-zinc-600,
+html.light .text-zinc-700 { color: #c4c4c8; }
+
+/* Solid background overrides */
+html.light .bg-zinc-950 { background-color: #f8fafc; }
+html.light .bg-zinc-900 { background-color: #ffffff; }
+html.light .bg-zinc-800 { background-color: #f4f4f5; }
+html.light .bg-zinc-700 { background-color: #e4e4e7; }
+
+/* Opacity variant overrides (Tailwind JIT produces e.g. bg-zinc-900\/30) */
+html.light .bg-zinc-900\/30 { background-color: rgba(255, 255, 255, 0.70); }
+html.light .bg-zinc-900\/40 { background-color: rgba(255, 255, 255, 0.75); }
+html.light .bg-zinc-900\/50 { background-color: rgba(255, 255, 255, 0.80); }
+html.light .bg-zinc-900\/60 { background-color: rgba(255, 255, 255, 0.85); }
+html.light .bg-zinc-900\/70 { background-color: rgba(255, 255, 255, 0.90); }
+html.light .bg-zinc-800\/40 { background-color: rgba(244, 244, 245, 0.60); }
+html.light .bg-zinc-800\/80 { background-color: rgba(255, 255, 255, 0.92); }
+html.light .bg-zinc-800\/90 { background-color: rgba(255, 255, 255, 0.96); }
+html.light .bg-zinc-950\/40 { background-color: rgba(248, 250, 252, 0.80); }
+
+/* Border overrides */
+html.light .border-zinc-800 { border-color: #e4e4e7; }
+html.light .border-zinc-700 { border-color: #d4d4d8; }
+
+/* Divider overrides (notification list) */
+html.light .divide-zinc-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #e4e4e7;
+}
+
+/* Scrollbar */
+html.light ::-webkit-scrollbar-track { background-color: #f4f4f5; }
+html.light ::-webkit-scrollbar-thumb { background-color: #a1a1aa; }
+html.light ::-webkit-scrollbar-thumb:hover { background-color: #71717a; }

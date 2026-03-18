@@ -43,7 +43,6 @@ export default function SettingsTabs({
   // Subscription
   const [currentPlan, setCurrentPlan] = useState<"free" | "pro">(initialPlan);
   const [upgrading, setUpgrading] = useState(false);
-  const [upgraded, setUpgraded] = useState(false);
 
   // Notifications
   const [notifications, setNotifications] = useState({
@@ -104,9 +103,16 @@ export default function SettingsTabs({
   function applyThemeClass(t: Theme) {
     const root = document.documentElement;
     root.classList.remove("dark", "light");
-    if (t === "Dark") root.classList.add("dark");
-    else if (t === "Light") root.classList.add("light");
-    // System: no class — defer to OS / Tailwind media query
+    if (t === "Dark") {
+      // explicit dark (app default — no class needed, but adding for clarity)
+    } else if (t === "Light") {
+      root.classList.add("light");
+    } else {
+      // System: follow OS preference
+      if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+        root.classList.add("light");
+      }
+    }
   }
 
   function selectTheme(t: Theme) {
@@ -127,7 +133,6 @@ export default function SettingsTabs({
     await supabase.auth.updateUser({ data: { plan: "pro" } });
     setCurrentPlan("pro");
     setUpgrading(false);
-    setUpgraded(true);
   }
 
   /* ── Notifications ── */
@@ -299,18 +304,12 @@ export default function SettingsTabs({
                 onChange={(e) => selectLanguage(e.target.value)}
               >
                 <option value="en">English</option>
-                <option value="es" disabled>
-                  Español (coming soon)
-                </option>
-                <option value="fr" disabled>
-                  Français (coming soon)
-                </option>
-                <option value="de" disabled>
-                  Deutsch (coming soon)
-                </option>
+                <option value="es">Español</option>
+                <option value="fr">Français</option>
+                <option value="de">Deutsch</option>
               </select>
               <p className="text-xs text-zinc-600 mt-2">
-                Additional languages will be available soon.
+                UI language preference is saved. Full translations coming soon.
               </p>
             </Field>
           </Section>
@@ -322,11 +321,7 @@ export default function SettingsTabs({
         <div className="space-y-6">
           <Section
             title="Current plan"
-            description={
-              currentPlan === "pro"
-                ? "You're on the Pro plan."
-                : "You're on the Free plan."
-            }
+            description={currentPlan === "pro" ? "You have full Pro access." : "You're on the Free plan."}
           >
             <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-4">
               {/* Plan header */}
@@ -388,8 +383,11 @@ export default function SettingsTabs({
 
               {/* Upgrade CTA or Pro confirmation */}
               {currentPlan === "pro" ? (
-                <p className="text-sm text-emerald-400 font-medium">
-                  You have full access to all Pro features.
+                <p className="text-sm text-emerald-400 font-medium flex items-center gap-1.5">
+                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                  All Pro features are active on your account.
                 </p>
               ) : (
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -419,18 +417,11 @@ export default function SettingsTabs({
                         d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
                       />
                     </svg>
-                    {upgrading
-                      ? "Upgrading…"
-                      : `Upgrade to Pro — $${PRO_PRICE}/mo`}
+                    {upgrading ? "Activating Pro…" : `Upgrade to Pro — $${PRO_PRICE}/mo`}
                   </button>
                 </div>
               )}
 
-              {upgraded && (
-                <p className="text-xs text-emerald-500">
-                  Upgraded successfully! Enjoy your Pro features.
-                </p>
-              )}
             </div>
           </Section>
 

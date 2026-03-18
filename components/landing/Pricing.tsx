@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PRO_PRICE } from "@/lib/constants";
 
 const plans = [
   {
@@ -21,7 +22,7 @@ const plans = [
   },
   {
     name: "Pro",
-    price: "$5",
+    price: `$${PRO_PRICE}`,
     period: "per month",
     description: "For streamers who want to grow fast with polished, professional content.",
     cta: "Go Pro",

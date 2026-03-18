@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PRO_PRICE } from "@/lib/constants";
 
 const proFeatures = [
   {
@@ -117,7 +118,7 @@ export default function ProFeatures() {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
             </svg>
-            Unlock Pro features — $9/mo
+            Unlock Pro features — ${PRO_PRICE}/mo
           </Link>
           <p className="text-xs text-zinc-600 mt-3">No credit card required to start. Upgrade any time.</p>
         </div>

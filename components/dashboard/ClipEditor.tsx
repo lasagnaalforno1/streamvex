@@ -119,7 +119,21 @@ function renderPreview(
   const fcSx = fc.x * vw, fcSy = fc.y * vh;
   const fcSw = fc.width * vw, fcSh = fc.height * vh;
 
-  if (layout === "split") {
+  if (layout === "gameplay_only") {
+    fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, 0, PW, PH);
+  } else if (layout === "blur_background") {
+    // Blurred background: stretch gameplay to fill, then center a clear copy on top
+    ctx.filter = "blur(10px)";
+    ctx.drawImage(vid, gpSx, gpSy, gpSw, gpSh, -16, -16, PW + 32, PH + 32);
+    ctx.filter = "none";
+    // Centered foreground: letterboxed to 75% of canvas height
+    const fgH = Math.round(PH * 0.75);
+    const scale = Math.min(PW / gpSw, fgH / gpSh);
+    const fgW = Math.round(gpSw * scale);
+    const fgHActual = Math.round(gpSh * scale);
+    ctx.drawImage(vid, gpSx, gpSy, gpSw, gpSh,
+      (PW - fgW) / 2, (PH - fgHActual) / 2, fgW, fgHActual);
+  } else if (layout === "split") {
     const gpH = Math.round(PH * 0.6);
     const fcH = PH - gpH;
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, 0, PW, gpH);
@@ -134,6 +148,7 @@ function renderPreview(
     ctx.fillRect(0, fcH, PW, 2);
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, fcH + 2, PW, gpH - 2);
   } else {
+    // fullscreen_facecam_bottom
     const fcH = Math.round(PH * 0.35);
     const gpH = PH - fcH;
     fillRect(ctx, vid, gpSx, gpSy, gpSw, gpSh, 0, 0, PW, gpH);
@@ -164,36 +179,36 @@ interface Template {
 
 const TEMPLATES: Template[] = [
   {
-    id: "streamer",
-    name: "Streamer",
-    description: "Gameplay + cam",
-    layout: "fullscreen_facecam_bottom",
-    gameplayCrop: { x: 0,    y: 0,    width: 1,    height: 0.75 },
-    facecamCrop:  { x: 0,    y: 0,    width: 0.35, height: 0.35 },
-  },
-  {
-    id: "reaction",
-    name: "Reaction",
-    description: "Big face, gameplay below",
+    id: "facecam_top",
+    name: "Facecam Top",
+    description: "Face above gameplay",
     layout: "fullscreen_facecam_top",
-    gameplayCrop: { x: 0,    y: 0.25, width: 1,    height: 0.75 },
-    facecamCrop:  { x: 0.1,  y: 0,    width: 0.8,  height: 0.75 },
+    gameplayCrop: { x: 0,   y: 0,   width: 1,    height: 0.75 },
+    facecamCrop:  { x: 0,   y: 0,   width: 0.35, height: 0.35 },
   },
   {
-    id: "split",
-    name: "Split",
-    description: "Balanced 60 / 40",
-    layout: "split",
-    gameplayCrop: { x: 0,    y: 0,    width: 1,    height: 0.65 },
-    facecamCrop:  { x: 0.1,  y: 0,    width: 0.5,  height: 0.5  },
-  },
-  {
-    id: "highlights",
-    name: "Highlights",
-    description: "Gameplay focus",
+    id: "facecam_bottom",
+    name: "Facecam Bottom",
+    description: "Gameplay above face",
     layout: "fullscreen_facecam_bottom",
-    gameplayCrop: { x: 0.1,  y: 0,    width: 0.8,  height: 1    },
-    facecamCrop:  { x: 0.65, y: 0.65, width: 0.35, height: 0.35 },
+    gameplayCrop: { x: 0,   y: 0,   width: 1,    height: 0.75 },
+    facecamCrop:  { x: 0,   y: 0,   width: 0.35, height: 0.35 },
+  },
+  {
+    id: "gameplay_only",
+    name: "Gameplay Full",
+    description: "No facecam",
+    layout: "gameplay_only",
+    gameplayCrop: { x: 0,   y: 0,   width: 1,    height: 1    },
+    facecamCrop:  { x: 0,   y: 0,   width: 0.35, height: 0.35 },
+  },
+  {
+    id: "blur_bg",
+    name: "Blur BG",
+    description: "Blurred background",
+    layout: "blur_background",
+    gameplayCrop: { x: 0,   y: 0,   width: 1,    height: 1    },
+    facecamCrop:  { x: 0,   y: 0,   width: 0.35, height: 0.35 },
   },
 ];
 
@@ -239,7 +254,7 @@ export default function ClipEditor({
   const [cutStart,      setCutStart]     = useState<number | null>(null);
   const [segHistory,    setSegHistory]   = useState<ClipSegment[][]>([]);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(
-    () => initialConfig ? null : "streamer"
+    () => initialConfig ? null : "facecam_top"
   );
 
   const videoRef          = useRef<HTMLVideoElement>(null);
@@ -1237,34 +1252,39 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
 // ─── template preview ─────────────────────────────────────────────────────────
 
 function TemplatePreview({ layout, active }: { layout: LayoutPreset; active: boolean }) {
-  const gp = active ? "bg-violet-500/70" : "bg-zinc-600/60";
-  const fc = active ? "bg-fuchsia-500/80" : "bg-zinc-500/70";
-  const div = "bg-zinc-950/80";
+  const gp   = active ? "bg-violet-500/70"  : "bg-zinc-600/60";
+  const fc   = active ? "bg-fuchsia-500/80" : "bg-zinc-500/70";
+  const divL = "bg-zinc-950/80";
   const wrap = `w-9 h-16 rounded-lg overflow-hidden flex flex-col flex-shrink-0 border ${active ? "border-violet-500/40" : "border-white/[0.07]"}`;
 
   if (layout === "fullscreen_facecam_top") {
     return (
       <div className={wrap}>
         <div className={fc} style={{ flex: "35 0 0" }} />
-        <div className={`h-px flex-shrink-0 ${div}`} />
+        <div className={`h-px flex-shrink-0 ${divL}`} />
         <div className={gp} style={{ flex: "65 0 0" }} />
       </div>
     );
   }
-  if (layout === "split") {
+  if (layout === "gameplay_only") {
+    // Single solid block — full violet, no split
+    return <div className={`${wrap} ${gp}`} />;
+  }
+  if (layout === "blur_background") {
+    // Blurred bg color + centered inner block
+    const bg   = active ? "bg-violet-900/60" : "bg-zinc-700/40";
+    const inner = active ? "bg-violet-400/80" : "bg-zinc-400/70";
     return (
-      <div className={wrap}>
-        <div className={gp} style={{ flex: "60 0 0" }} />
-        <div className={`h-px flex-shrink-0 ${div}`} />
-        <div className={fc} style={{ flex: "40 0 0" }} />
+      <div className={`${wrap} ${bg} relative items-center justify-center`}>
+        <div className={`${inner} rounded-sm`} style={{ width: "70%", height: "55%" }} />
       </div>
     );
   }
-  // fullscreen_facecam_bottom
+  // fullscreen_facecam_bottom (default)
   return (
     <div className={wrap}>
       <div className={gp} style={{ flex: "65 0 0" }} />
-      <div className={`h-px flex-shrink-0 ${div}`} />
+      <div className={`h-px flex-shrink-0 ${divL}`} />
       <div className={fc} style={{ flex: "35 0 0" }} />
     </div>
   );

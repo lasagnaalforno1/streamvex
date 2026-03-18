@@ -3,7 +3,9 @@ export type ClipStatus = "uploading" | "processing" | "ready" | "error";
 export type LayoutPreset =
   | "fullscreen_facecam_top"
   | "fullscreen_facecam_bottom"
-  | "split";
+  | "split"
+  | "gameplay_only"
+  | "blur_background";
 
 export interface CropBox {
   x: number;      // 0–1 normalized left edge

@@ -75,7 +75,7 @@ export default function ClipActions({ clipId, initialTitle }: Props) {
         setDeleting(false);
         return;
       }
-      router.push("/app");
+      router.push("/dashboard");
     } catch {
       setDeleteError("Network error — try again");
       setDeleting(false);

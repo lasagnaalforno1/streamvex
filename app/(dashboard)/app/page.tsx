@@ -69,9 +69,6 @@ export default async function AppHomePage() {
         <div className="pointer-events-none absolute -bottom-20 -right-20 w-64 h-64 rounded-full bg-purple-700/[0.05] blur-3xl" />
 
         <div className="relative">
-          <p className="text-xs font-semibold text-violet-400 uppercase tracking-widest mb-3">
-            StreamVex Studio
-          </p>
           <h1 className="text-3xl sm:text-4xl font-bold text-white leading-tight mb-3">
             Turn your clips into{" "}
             <span className="gradient-text">vertical gold</span>

@@ -53,25 +53,35 @@ function buildFilterComplex(config: EditConfig): string {
     ].join(";");
   }
 
-  // fullscreen_facecam_top:  facecam top 35 % (672 px) + gameplay bottom 65 % (1248 px)
-  // fullscreen_facecam_bottom: gameplay top 65 % (1248 px) + facecam bottom 35 % (672 px)
-  const FC_H = 448;  // 1920 * 0.35
-  const GP_H = 832/ 1920 * 0.65
+  if (config.layout === "gameplay_only") {
+    return `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[out]`;
+  }
+
+  if (config.layout === "blur_background") {
+    return [
+      `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]`,
+      `[0:v]${gpExpr},scale=-2:900:force_original_aspect_ratio=decrease[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`,
+    ].join(";");
+  }
+
+  const FC_H = 448;
+  const GP_H = 832;
 
   if (config.layout === "fullscreen_facecam_top") {
     return [
+      `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
+      `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
+      `[fc][gp]vstack[out]`,
+    ].join(";");
+  }
+
+  // fullscreen_facecam_bottom
+  return [
     `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
     `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
     `[gp][fc]vstack[out]`,
   ].join(";");
-}
-
-  // fullscreen_facecam_bottom
-return [
-  `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
-  `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
-  `[gp][fc]vstack[out]`,
-].join(";");
 }
 
 // ─── public API ───────────────────────────────────────────────────────────────

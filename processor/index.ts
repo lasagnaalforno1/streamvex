@@ -15,7 +15,9 @@ const execFileAsync = promisify(execFile);
 type LayoutPreset =
   | "fullscreen_facecam_top"
   | "fullscreen_facecam_bottom"
-  | "split";
+  | "split"
+  | "gameplay_only"
+  | "blur_background";
 
 interface CropBox {
   x: number;
@@ -103,6 +105,18 @@ function buildFilterComplex(config: EditConfig): string {
     ].join(";");
   }
 
+  if (config.layout === "gameplay_only") {
+    return `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[out]`;
+  }
+
+  if (config.layout === "blur_background") {
+    return [
+      `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]`,
+      `[0:v]${gpExpr},scale=-2:900:force_original_aspect_ratio=decrease[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`,
+    ].join(";");
+  }
+
   const FC_H = 448;
   const GP_H = 832;
 
@@ -155,23 +169,32 @@ function buildSegmentsFilterComplex(
   const aList = segs.map((_, i) => `[sa${i}]`).join("");
   parts.push(`${vList}${aList}concat=n=${N}:v=1:a=1[cv][ca]`);
 
-  // Split [cv] so it can be referenced twice (gameplay crop + facecam crop)
-  parts.push(`[cv]split[cv1][cv2]`);
-
-  // Apply layout
-  if (layout === "split") {
-    parts.push(`[cv1]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`);
-    parts.push(`[cv2]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`);
-    parts.push(`[gp][fc]vstack[out]`);
-  } else if (layout === "fullscreen_facecam_top") {
-    parts.push(`[cv1]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
-    parts.push(`[cv2]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
-    parts.push(`[fc][gp]vstack[out]`);
+  // Apply layout — single-source layouts don't need a split
+  if (layout === "gameplay_only") {
+    parts.push(`[cv]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[out]`);
+  } else if (layout === "blur_background") {
+    parts.push(`[cv]split[cv1][cv2]`);
+    parts.push(`[cv1]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]`);
+    parts.push(`[cv2]${gpExpr},scale=-2:900:force_original_aspect_ratio=decrease[fg]`);
+    parts.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`);
   } else {
-    // fullscreen_facecam_bottom
-    parts.push(`[cv1]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
-    parts.push(`[cv2]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
-    parts.push(`[gp][fc]vstack[out]`);
+    // Split [cv] so it can be referenced twice (gameplay crop + facecam crop)
+    parts.push(`[cv]split[cv1][cv2]`);
+
+    if (layout === "split") {
+      parts.push(`[cv1]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`);
+      parts.push(`[cv2]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`);
+      parts.push(`[gp][fc]vstack[out]`);
+    } else if (layout === "fullscreen_facecam_top") {
+      parts.push(`[cv1]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
+      parts.push(`[cv2]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
+      parts.push(`[fc][gp]vstack[out]`);
+    } else {
+      // fullscreen_facecam_bottom
+      parts.push(`[cv1]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
+      parts.push(`[cv2]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
+      parts.push(`[gp][fc]vstack[out]`);
+    }
   }
 
   return {

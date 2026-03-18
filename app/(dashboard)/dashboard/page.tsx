@@ -39,10 +39,10 @@ export default async function DashboardPage() {
     <div className="space-y-8">
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-2xl border border-zinc-800/60 bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 px-6 py-8 sm:px-10">
+      <div className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-gradient-to-br from-zinc-900 via-zinc-900/90 to-zinc-950 px-6 py-8 sm:px-10 shadow-lg">
         {/* Decorative blobs */}
-        <div className="pointer-events-none absolute -top-28 -right-28 w-72 h-72 rounded-full bg-violet-600/[0.07] blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-16 -left-16 w-52 h-52 rounded-full bg-purple-700/[0.05] blur-3xl" />
+        <div className="pointer-events-none absolute -top-28 -right-28 w-80 h-80 rounded-full bg-violet-600/[0.12] blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-16 -left-16 w-60 h-60 rounded-full bg-fuchsia-700/[0.08] blur-3xl" />
 
         <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div>
@@ -67,7 +67,7 @@ export default async function DashboardPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
 
           {/* Total */}
-          <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-5 py-4">
+          <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-5 py-4 transition-colors hover:border-white/[0.12]">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Total</span>
               <div className="w-7 h-7 rounded-lg bg-zinc-800 flex items-center justify-center">
@@ -80,7 +80,7 @@ export default async function DashboardPage() {
           </div>
 
           {/* Ready */}
-          <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-5 py-4">
+          <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-5 py-4 transition-colors hover:border-emerald-500/20">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Ready</span>
               <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
@@ -93,7 +93,7 @@ export default async function DashboardPage() {
           </div>
 
           {/* Processing */}
-          <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-5 py-4">
+          <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-5 py-4 transition-colors hover:border-amber-500/20">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Processing</span>
               <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center">
@@ -106,7 +106,7 @@ export default async function DashboardPage() {
           </div>
 
           {/* Error */}
-          <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-5 py-4">
+          <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-5 py-4 transition-colors hover:border-red-500/20">
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Errors</span>
               <div className="w-7 h-7 rounded-lg bg-red-500/10 flex items-center justify-center">

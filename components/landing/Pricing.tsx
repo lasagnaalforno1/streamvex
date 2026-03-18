@@ -64,15 +64,15 @@ export default function Pricing() {
           {plans.map((plan) => (
             <div
               key={plan.name}
-              className={`relative rounded-2xl p-8 border transition-all ${
+              className={`relative rounded-2xl p-8 border transition-all duration-200 ${
                 plan.highlighted
-                  ? "bg-gradient-to-b from-violet-900/40 to-zinc-900 border-violet-600/50 shadow-xl shadow-violet-900/20"
-                  : "bg-zinc-900/60 border-zinc-800"
+                  ? "bg-gradient-to-b from-violet-900/50 via-purple-900/20 to-zinc-900/90 border-violet-500/60 shadow-2xl shadow-violet-900/40 ring-1 ring-violet-500/20"
+                  : "bg-zinc-900/60 border-zinc-800 hover:border-zinc-700"
               }`}
             >
               {plan.highlighted && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                  <span className="px-3 py-1 rounded-full bg-violet-600 text-white text-xs font-bold tracking-wide">
+                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
+                  <span className="px-3 py-1 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-xs font-bold tracking-wider shadow-md shadow-violet-900/50">
                     MOST POPULAR
                   </span>
                 </div>

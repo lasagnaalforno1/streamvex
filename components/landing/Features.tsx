@@ -84,15 +84,15 @@ export default function Features() {
           {features.map((feature) => (
             <div
               key={feature.title}
-              className="glass-card p-6 group hover:border-violet-700/40 transition-colors duration-200"
+              className="glass-card p-6 group hover:border-violet-500/50 hover:scale-[1.02] hover:shadow-lg hover:shadow-violet-900/25 transition-all duration-200 cursor-default"
             >
-              <div className="w-10 h-10 rounded-lg bg-violet-500/10 text-violet-400 flex items-center justify-center mb-4 group-hover:bg-violet-500/20 transition-colors">
+              <div className="w-10 h-10 rounded-lg bg-violet-500/15 text-violet-400 flex items-center justify-center mb-4 group-hover:bg-violet-500/25 group-hover:text-violet-300 transition-all duration-200">
                 {feature.icon}
               </div>
-              <h3 className="font-semibold text-zinc-100 mb-2">
+              <h3 className="font-semibold text-zinc-100 group-hover:text-white mb-2 transition-colors">
                 {feature.title}
               </h3>
-              <p className="text-zinc-500 text-sm leading-relaxed">
+              <p className="text-zinc-500 group-hover:text-zinc-400 text-sm leading-relaxed transition-colors">
                 {feature.description}
               </p>
             </div>

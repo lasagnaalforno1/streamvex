@@ -4,19 +4,19 @@ import type { ClipStatus } from "@/lib/types";
 const STATUS_CONFIG: Record<ClipStatus, { label: string; className: string }> = {
   uploading: {
     label: "Uploading",
-    className: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+    className: "bg-blue-500/20 text-blue-300 border-blue-500/35 shadow-sm shadow-blue-900/30",
   },
   processing: {
     label: "Processing",
-    className: "bg-amber-500/15 text-amber-400 border-amber-500/25",
+    className: "bg-amber-500/20 text-amber-300 border-amber-500/35 shadow-sm shadow-amber-900/30",
   },
   ready: {
     label: "Ready",
-    className: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+    className: "bg-emerald-500/20 text-emerald-300 border-emerald-500/35 shadow-sm shadow-emerald-900/30",
   },
   error: {
     label: "Error",
-    className: "bg-red-500/15 text-red-400 border-red-500/25",
+    className: "bg-red-500/20 text-red-300 border-red-500/35 shadow-sm shadow-red-900/30",
   },
 };
 
@@ -27,7 +27,7 @@ export default function StatusBadge({ status }: { status: ClipStatus }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border",
+        "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border backdrop-blur-sm",
         config.className
       )}
     >

@@ -59,10 +59,10 @@ export default function ClipCard({ clip, previewUrl }: Props) {
   return (
     <Link
       href={`/clips/${clip.id}`}
-      className="group flex flex-col rounded-xl border border-zinc-800/60 bg-zinc-900/50 overflow-hidden
+      className="group flex flex-col rounded-xl border border-white/[0.07] bg-zinc-900/60 overflow-hidden
                  transition-all duration-200
-                 hover:border-violet-500/40 hover:bg-zinc-900 hover:-translate-y-0.5
-                 hover:shadow-xl hover:shadow-violet-950/20"
+                 hover:border-violet-500/50 hover:bg-zinc-900 hover:-translate-y-1 hover:scale-[1.01]
+                 hover:shadow-2xl hover:shadow-violet-950/40"
     >
       {/* ── Thumbnail ──────────────────────────────────────────────────────── */}
       <div
@@ -174,7 +174,7 @@ export default function ClipCard({ clip, previewUrl }: Props) {
           {clip.title}
         </p>
         <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-zinc-600 truncate">
+          <p className="text-xs text-zinc-500 truncate">
             {meta.join(" · ")}
           </p>
           {isProcessing && (

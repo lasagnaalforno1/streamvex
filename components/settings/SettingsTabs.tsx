@@ -5,17 +5,19 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import ProBadge from "@/components/ui/ProBadge";
 import { PRO_PRICE } from "@/lib/constants";
+import { type Locale, LOCALES, getT } from "@/lib/i18n";
 
 type Tab = "account" | "preferences" | "subscription" | "privacy" | "notifications";
 type Theme = "Dark" | "Light" | "System";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "account", label: "Account" },
-  { id: "preferences", label: "Preferences" },
-  { id: "subscription", label: "Subscription" },
-  { id: "privacy", label: "Privacy" },
-  { id: "notifications", label: "Notifications" },
-];
+const TAB_IDS: Tab[] = ["account", "preferences", "subscription", "privacy", "notifications"];
+const TAB_KEYS: Record<Tab, string> = {
+  account: "tab.account",
+  preferences: "tab.preferences",
+  subscription: "tab.subscription",
+  privacy: "tab.privacy",
+  notifications: "tab.notifications",
+};
 
 interface Props {
   email: string;
@@ -38,7 +40,7 @@ export default function SettingsTabs({
 
   // Preferences
   const [theme, setTheme] = useState<Theme>("Dark");
-  const [language, setLanguage] = useState("en");
+  const [language, setLanguage] = useState<Locale>("en");
 
   // Subscription
   const [currentPlan, setCurrentPlan] = useState<"free" | "pro">(initialPlan);
@@ -53,6 +55,9 @@ export default function SettingsTabs({
 
   const supabase = createClient();
 
+  // t() is derived from language state — re-evaluated on every render when locale changes
+  const t = getT(language);
+
   // Load persisted preferences from localStorage on mount
   useEffect(() => {
     const storedTheme = localStorage.getItem("sv-theme") as Theme | null;
@@ -61,12 +66,14 @@ export default function SettingsTabs({
       applyThemeClass(storedTheme);
     }
 
-    const storedLang = localStorage.getItem("sv-language");
-    if (storedLang) setLanguage(storedLang);
+    const storedLang = localStorage.getItem("sv-language") as Locale | null;
+    if (storedLang && LOCALES.includes(storedLang)) setLanguage(storedLang);
 
     const storedNotifs = localStorage.getItem("sv-notifications");
     if (storedNotifs) {
-      try { setNotifications(JSON.parse(storedNotifs)); } catch {}
+      try {
+        setNotifications(JSON.parse(storedNotifs));
+      } catch {}
     }
   }, []);
 
@@ -103,27 +110,25 @@ export default function SettingsTabs({
   function applyThemeClass(t: Theme) {
     const root = document.documentElement;
     root.classList.remove("dark", "light");
-    if (t === "Dark") {
-      // explicit dark (app default — no class needed, but adding for clarity)
-    } else if (t === "Light") {
+    if (t === "Light") {
       root.classList.add("light");
-    } else {
-      // System: follow OS preference
+    } else if (t === "System") {
       if (window.matchMedia("(prefers-color-scheme: light)").matches) {
         root.classList.add("light");
       }
     }
   }
 
-  function selectTheme(t: Theme) {
-    setTheme(t);
-    localStorage.setItem("sv-theme", t);
-    applyThemeClass(t);
+  function selectTheme(selected: Theme) {
+    setTheme(selected);
+    localStorage.setItem("sv-theme", selected);
+    applyThemeClass(selected);
   }
 
   function selectLanguage(lang: string) {
-    setLanguage(lang);
-    localStorage.setItem("sv-language", lang);
+    const locale = LOCALES.includes(lang as Locale) ? (lang as Locale) : "en";
+    setLanguage(locale);
+    localStorage.setItem("sv-language", locale);
   }
 
   /* ── Subscription ── */
@@ -149,17 +154,17 @@ export default function SettingsTabs({
     <div>
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-zinc-800 mb-8 overflow-x-auto pb-px">
-        {TABS.map((tab) => (
+        {TAB_IDS.map((id) => (
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            key={id}
+            onClick={() => setActiveTab(id)}
             className={`px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-              activeTab === tab.id
+              activeTab === id
                 ? "border-violet-500 text-violet-400"
                 : "border-transparent text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            {tab.label}
+            {t(TAB_KEYS[id])}
           </button>
         ))}
       </div>
@@ -167,12 +172,12 @@ export default function SettingsTabs({
       {/* ── Account ─────────────────────────────────────────────────────────── */}
       {activeTab === "account" && (
         <div className="space-y-6">
-          <Section title="Profile" description="Your public-facing identity on StreamVex.">
-            <Field label="Email">
+          <Section title={t("section.profile")} description="Your public-facing identity on StreamVex.">
+            <Field label={t("field.email")}>
               <p className="text-sm text-zinc-300 mt-1">{email}</p>
-              <p className="text-xs text-zinc-600 mt-0.5">Email cannot be changed here.</p>
+              <p className="text-xs text-zinc-600 mt-0.5">{t("label.emailCannotChange")}</p>
             </Field>
-            <Field label="Display name">
+            <Field label={t("field.displayName")}>
               <div className="flex gap-2 mt-1">
                 <input
                   type="text"
@@ -186,17 +191,17 @@ export default function SettingsTabs({
                   disabled={isPending}
                   className="btn-secondary text-sm px-4"
                 >
-                  {displayNameSaved ? "Saved!" : "Save"}
+                  {displayNameSaved ? t("btn.saved") : t("btn.save")}
                 </button>
               </div>
             </Field>
           </Section>
 
-          <Section title="Security" description="Manage how you sign in.">
-            <Field label="Password">
+          <Section title={t("section.security")} description="Manage how you sign in.">
+            <Field label={t("field.password")}>
               {passwordSent ? (
                 <p className="text-sm text-emerald-400 mt-1">
-                  Password reset email sent — check your inbox.
+                  {t("label.passwordResetSent")}
                 </p>
               ) : (
                 <div className="mt-1">
@@ -205,7 +210,7 @@ export default function SettingsTabs({
                     disabled={isPending}
                     className="btn-outline text-sm px-4"
                   >
-                    Send password reset email
+                    {t("btn.sendPasswordReset")}
                   </button>
                   <p className="text-xs text-zinc-600 mt-2">
                     We&apos;ll send a reset link to{" "}
@@ -217,18 +222,18 @@ export default function SettingsTabs({
           </Section>
 
           <Section
-            title="Danger zone"
+            title={t("section.dangerZone")}
             description="Irreversible actions — proceed with caution."
             danger
           >
-            <Field label="Delete account">
+            <Field label={t("btn.deleteAccount")}>
               {!deleteConfirm ? (
                 <div className="mt-1">
                   <button
                     onClick={() => setDeleteConfirm(true)}
                     className="text-sm px-4 py-2 rounded-md bg-red-950/40 text-red-400 border border-red-900/50 hover:bg-red-900/50 hover:text-red-300 transition-colors"
                   >
-                    Delete my account
+                    {t("btn.deleteAccount")}
                   </button>
                   <p className="text-xs text-zinc-600 mt-2">
                     This permanently removes your account and all clips.
@@ -237,7 +242,7 @@ export default function SettingsTabs({
               ) : (
                 <div className="mt-1 rounded-lg border border-red-900/40 bg-red-950/30 p-4 space-y-3">
                   <p className="text-sm text-red-300 font-medium">
-                    Are you sure? This cannot be undone.
+                    {t("label.deleteConfirmTitle")}
                   </p>
                   <p className="text-xs text-zinc-500">
                     Your account and all clips will be permanently deleted.
@@ -248,13 +253,13 @@ export default function SettingsTabs({
                       disabled={deleting}
                       className="text-sm px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-500 transition-colors disabled:opacity-50"
                     >
-                      {deleting ? "Deleting…" : "Yes, delete my account"}
+                      {deleting ? t("btn.deleting") : t("btn.confirmDelete")}
                     </button>
                     <button
                       onClick={() => setDeleteConfirm(false)}
                       className="text-xs text-zinc-500 hover:text-zinc-400 transition-colors"
                     >
-                      Cancel
+                      {t("btn.cancel")}
                     </button>
                   </div>
                 </div>
@@ -268,36 +273,34 @@ export default function SettingsTabs({
       {activeTab === "preferences" && (
         <div className="space-y-6">
           <Section
-            title="Appearance"
+            title={t("section.appearance")}
             description="Control how StreamVex looks for you."
           >
-            <Field label="Theme">
+            <Field label={t("field.theme")}>
               <div className="flex gap-2 mt-1">
-                {(["Dark", "Light", "System"] as const).map((t) => (
+                {(["Dark", "Light", "System"] as const).map((opt) => (
                   <button
-                    key={t}
-                    onClick={() => selectTheme(t)}
+                    key={opt}
+                    onClick={() => selectTheme(opt)}
                     className={`px-4 py-1.5 rounded-md text-sm border transition-colors ${
-                      theme === t
+                      theme === opt
                         ? "border-violet-500/60 bg-violet-500/10 text-violet-300"
                         : "border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-300"
                     }`}
                   >
-                    {t}
+                    {t(`theme.${opt.toLowerCase()}`)}
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-zinc-600 mt-2">
-                Light and System themes apply the class — full visual styles coming soon.
-              </p>
+              <p className="text-xs text-zinc-600 mt-2">{t("label.themeNote")}</p>
             </Field>
           </Section>
 
           <Section
-            title="Language"
+            title={t("section.language")}
             description="Choose your preferred language."
           >
-            <Field label="Language">
+            <Field label={t("field.language")}>
               <select
                 className="input-field text-sm mt-1 w-48"
                 value={language}
@@ -308,9 +311,7 @@ export default function SettingsTabs({
                 <option value="fr">Français</option>
                 <option value="de">Deutsch</option>
               </select>
-              <p className="text-xs text-zinc-600 mt-2">
-                UI language preference is saved. Full translations coming soon.
-              </p>
+              <p className="text-xs text-zinc-600 mt-2">{t("label.languageNote")}</p>
             </Field>
           </Section>
         </div>
@@ -320,25 +321,27 @@ export default function SettingsTabs({
       {activeTab === "subscription" && (
         <div className="space-y-6">
           <Section
-            title="Current plan"
-            description={currentPlan === "pro" ? "You have full Pro access." : "You're on the Free plan."}
+            title={t("section.currentPlan")}
+            description={
+              currentPlan === "pro" ? "You have full Pro access." : "You're on the Free plan."
+            }
           >
             <div className="mt-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-4">
               {/* Plan header */}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">
-                    Current plan
+                    {t("section.currentPlan")}
                   </p>
                   <div className="flex items-center gap-2">
                     <p className="text-lg font-bold text-zinc-100">
-                      {currentPlan === "pro" ? "Pro" : "Free"}
+                      {currentPlan === "pro" ? t("plan.pro") : t("plan.free")}
                     </p>
                     {currentPlan === "pro" && <ProBadge />}
                   </div>
                 </div>
                 <span className="text-xs px-2.5 py-1 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">
-                  Active
+                  {t("label.active")}
                 </span>
               </div>
 
@@ -368,11 +371,7 @@ export default function SettingsTabs({
                       strokeWidth="2.5"
                       viewBox="0 0 24 24"
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M4.5 12.75l6 6 9-13.5"
-                      />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                     </svg>
                     {feat}
                   </li>
@@ -381,19 +380,24 @@ export default function SettingsTabs({
 
               <div className="h-px bg-zinc-800" />
 
-              {/* Upgrade CTA or Pro confirmation */}
               {currentPlan === "pro" ? (
                 <p className="text-sm text-emerald-400 font-medium flex items-center gap-1.5">
-                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                  <svg
+                    className="w-4 h-4 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    viewBox="0 0 24 24"
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                   </svg>
-                  All Pro features are active on your account.
+                  {t("label.allProActive")}
                 </p>
               ) : (
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-zinc-300">
-                      Unlock Pro features
+                      {t("label.unlockProFeatures")}
                     </p>
                     <p className="text-xs text-zinc-600">
                       Auto subtitles, blur background, priority exports and more.
@@ -417,31 +421,31 @@ export default function SettingsTabs({
                         d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
                       />
                     </svg>
-                    {upgrading ? "Activating Pro…" : `Upgrade to Pro — $${PRO_PRICE}/mo`}
+                    {upgrading
+                      ? t("btn.activatingPro")
+                      : `${t("btn.upgradePro")} — $${PRO_PRICE}/mo`}
                   </button>
                 </div>
               )}
-
             </div>
           </Section>
 
-          <Section
-            title="Usage"
-            description="Your activity this billing period."
-          >
+          <Section title={t("section.usage")} description="Your activity this billing period.">
             <div className="grid sm:grid-cols-3 gap-3 mt-2">
-              {[
-                { label: "Clips this month", value: "—", sub: "Tracking coming soon" },
-                { label: "Storage used", value: "—", sub: "Tracking coming soon" },
-                { label: "Exports", value: "—", sub: "Tracking coming soon" },
-              ].map((stat) => (
+              {(
+                [
+                  { labelKey: "label.clipsThisMonth", subKey: "label.trackingComingSoon" },
+                  { labelKey: "label.storageUsed", subKey: "label.trackingComingSoon" },
+                  { labelKey: "label.exports", subKey: "label.trackingComingSoon" },
+                ] as const
+              ).map((stat) => (
                 <div
-                  key={stat.label}
+                  key={stat.labelKey}
                   className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4"
                 >
-                  <p className="text-xs text-zinc-500 mb-1">{stat.label}</p>
-                  <p className="text-xl font-bold text-zinc-100">{stat.value}</p>
-                  <p className="text-[11px] text-zinc-700 mt-0.5">{stat.sub}</p>
+                  <p className="text-xs text-zinc-500 mb-1">{t(stat.labelKey)}</p>
+                  <p className="text-xl font-bold text-zinc-100">—</p>
+                  <p className="text-[11px] text-zinc-700 mt-0.5">{t(stat.subKey)}</p>
                 </div>
               ))}
             </div>
@@ -453,23 +457,22 @@ export default function SettingsTabs({
       {activeTab === "privacy" && (
         <div className="space-y-6">
           <Section
-            title="Your data"
+            title={t("section.yourData")}
             description="We respect your privacy and only store what's needed to provide the service."
           >
             <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/30 p-4 space-y-2 text-sm text-zinc-400">
               <p>
-                StreamVex stores your account email, clip files, and processing
-                configurations in Supabase. Your data is never sold or shared with
-                third parties.
+                StreamVex stores your account email, clip files, and processing configurations
+                in Supabase. Your data is never sold or shared with third parties.
               </p>
               <p>
-                Clip files are stored securely in a private cloud bucket and are
-                only accessible to you.
+                Clip files are stored securely in a private cloud bucket and are only accessible
+                to you.
               </p>
             </div>
           </Section>
 
-          <Section title="Legal" description="Review our policies.">
+          <Section title={t("section.legal")} description="Review our policies.">
             <div className="mt-2 space-y-2">
               {[
                 { label: "Privacy Policy", href: "/privacy" },
@@ -503,7 +506,7 @@ export default function SettingsTabs({
           </Section>
 
           <Section
-            title="Data requests"
+            title={t("section.dataRequests")}
             description="Your rights under GDPR and similar regulations."
           >
             <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-400">
@@ -526,7 +529,7 @@ export default function SettingsTabs({
       {activeTab === "notifications" && (
         <div className="space-y-6">
           <Section
-            title="Email notifications"
+            title={t("section.emailNotifications")}
             description="Choose which emails you receive from StreamVex."
           >
             <div className="mt-2 rounded-xl border border-zinc-800 divide-y divide-zinc-800 overflow-hidden">
@@ -534,18 +537,18 @@ export default function SettingsTabs({
                 [
                   {
                     key: "clipReady" as const,
-                    label: "Clip ready",
-                    description: "Notify me when a clip finishes processing",
+                    labelKey: "notif.clipReady",
+                    descKey: "notif.clipReadyDesc",
                   },
                   {
                     key: "productUpdates" as const,
-                    label: "Product updates",
-                    description: "New features, templates, and improvements",
+                    labelKey: "notif.productUpdates",
+                    descKey: "notif.productUpdatesDesc",
                   },
                   {
                     key: "tips" as const,
-                    label: "Tips & tutorials",
-                    description: "How to get the most out of StreamVex",
+                    labelKey: "notif.tips",
+                    descKey: "notif.tipsDesc",
                   },
                 ]
               ).map((item) => (
@@ -554,10 +557,8 @@ export default function SettingsTabs({
                   className="flex items-center justify-between px-4 py-3.5 bg-zinc-900/30"
                 >
                   <div>
-                    <p className="text-sm text-zinc-300">{item.label}</p>
-                    <p className="text-xs text-zinc-600 mt-0.5">
-                      {item.description}
-                    </p>
+                    <p className="text-sm text-zinc-300">{t(item.labelKey)}</p>
+                    <p className="text-xs text-zinc-600 mt-0.5">{t(item.descKey)}</p>
                   </div>
                   <button
                     role="switch"
@@ -578,9 +579,7 @@ export default function SettingsTabs({
                 </div>
               ))}
             </div>
-            <p className="text-xs text-zinc-700 mt-3">
-              Preferences are saved locally. Email delivery will be configured in a future update.
-            </p>
+            <p className="text-xs text-zinc-700 mt-3">{t("label.notifPrefsNote")}</p>
           </Section>
         </div>
       )}
@@ -604,17 +603,11 @@ function Section({
   return (
     <div
       className={`rounded-xl border p-6 ${
-        danger
-          ? "border-red-900/40 bg-red-950/10"
-          : "border-zinc-800 bg-zinc-900/30"
+        danger ? "border-red-900/40 bg-red-950/10" : "border-zinc-800 bg-zinc-900/30"
       }`}
     >
       <div className="mb-4">
-        <h2
-          className={`text-sm font-semibold ${
-            danger ? "text-red-400" : "text-zinc-100"
-          }`}
-        >
+        <h2 className={`text-sm font-semibold ${danger ? "text-red-400" : "text-zinc-100"}`}>
           {title}
         </h2>
         <p className="text-xs text-zinc-500 mt-0.5">{description}</p>
@@ -624,13 +617,7 @@ function Section({
   );
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <label className="text-xs font-medium text-zinc-400">{label}</label>

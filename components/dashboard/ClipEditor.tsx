@@ -148,6 +148,53 @@ function renderPreview(
 const LAYOUTS: { id: LayoutPreset; label: string; desc: string }[] = [
   { id: "fullscreen_facecam_top",    label: "Facecam Top",    desc: "Face · Gameplay" },
   { id: "fullscreen_facecam_bottom", label: "Facecam Bottom", desc: "Gameplay · Face" },
+  { id: "split",                     label: "Split",          desc: "60 / 40" },
+];
+
+// ─── template presets ─────────────────────────────────────────────────────────
+
+interface Template {
+  id: string;
+  name: string;
+  description: string;
+  layout: LayoutPreset;
+  gameplayCrop: CropBox;
+  facecamCrop: CropBox;
+}
+
+const TEMPLATES: Template[] = [
+  {
+    id: "streamer",
+    name: "Streamer",
+    description: "Gameplay + cam",
+    layout: "fullscreen_facecam_bottom",
+    gameplayCrop: { x: 0,    y: 0,    width: 1,    height: 0.75 },
+    facecamCrop:  { x: 0,    y: 0,    width: 0.35, height: 0.35 },
+  },
+  {
+    id: "reaction",
+    name: "Reaction",
+    description: "Big face, gameplay below",
+    layout: "fullscreen_facecam_top",
+    gameplayCrop: { x: 0,    y: 0.25, width: 1,    height: 0.75 },
+    facecamCrop:  { x: 0.1,  y: 0,    width: 0.8,  height: 0.75 },
+  },
+  {
+    id: "split",
+    name: "Split",
+    description: "Balanced 60 / 40",
+    layout: "split",
+    gameplayCrop: { x: 0,    y: 0,    width: 1,    height: 0.65 },
+    facecamCrop:  { x: 0.1,  y: 0,    width: 0.5,  height: 0.5  },
+  },
+  {
+    id: "highlights",
+    name: "Highlights",
+    description: "Gameplay focus",
+    layout: "fullscreen_facecam_bottom",
+    gameplayCrop: { x: 0.1,  y: 0,    width: 0.8,  height: 1    },
+    facecamCrop:  { x: 0.65, y: 0.65, width: 0.35, height: 0.35 },
+  },
 ];
 
 // ─── props ────────────────────────────────────────────────────────────────────
@@ -191,6 +238,9 @@ export default function ClipEditor({
   const [downloading,   setDownloading]  = useState(false);
   const [cutStart,      setCutStart]     = useState<number | null>(null);
   const [segHistory,    setSegHistory]   = useState<ClipSegment[][]>([]);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(
+    () => initialConfig ? null : "streamer"
+  );
 
   const videoRef          = useRef<HTMLVideoElement>(null);
   const canvasRef         = useRef<HTMLCanvasElement>(null);
@@ -354,6 +404,11 @@ export default function ClipEditor({
 
   function updateConfig(patch: Partial<EditConfig>) {
     setConfig(prev => ({ ...prev, ...patch }));
+  }
+
+  function applyTemplate(t: Template) {
+    setActiveTemplateId(t.id);
+    updateConfig({ layout: t.layout, gameplayCrop: t.gameplayCrop, facecamCrop: t.facecamCrop });
   }
 
   // ── segment actions ───────────────────────────────────────────────────────
@@ -637,28 +692,45 @@ export default function ClipEditor({
         </div>
       )}
 
-      {/* ── layout selector ── */}
+      {/* ── STYLE ── */}
+      <div className="flex items-center gap-3 pt-1">
+        <p className="text-[10px] font-bold tracking-[0.15em] text-zinc-600 uppercase shrink-0">Style</p>
+        <div className="flex-1 h-px bg-zinc-800/60" />
+      </div>
+
       <div className="glass-card p-4">
-        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">Layout</p>
-        <div className="flex gap-3">
-          {LAYOUTS.map(({ id, label, desc }) => (
-            <button
-              key={id}
-              onClick={() => updateConfig({ layout: id })}
-              className={`flex items-center gap-3 flex-1 px-4 py-3 rounded-lg border transition-colors ${
-                config.layout === id
-                  ? "border-violet-500 bg-violet-500/10 text-violet-300"
-                  : "border-zinc-700 hover:border-zinc-600 text-zinc-400 hover:text-zinc-300"
-              }`}
-            >
-              <LayoutIcon id={id} active={config.layout === id} />
-              <div className="text-left">
-                <div className="text-sm font-medium leading-tight">{label}</div>
-                <div className="text-xs opacity-50 mt-0.5">{desc}</div>
-              </div>
-            </button>
-          ))}
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-zinc-200">Template</p>
+          <p className="text-[11px] text-zinc-600">Sets layout &amp; crop defaults</p>
         </div>
+        <div className="grid grid-cols-4 gap-2">
+          {TEMPLATES.map((t) => {
+            const isActive = activeTemplateId === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => applyTemplate(t)}
+                className={`flex flex-col items-center gap-2.5 px-2 py-3 rounded-xl border transition-all duration-150 ${
+                  isActive
+                    ? "border-violet-500/70 bg-violet-500/10 text-violet-300"
+                    : "border-zinc-700/60 hover:border-zinc-600 text-zinc-500 hover:text-zinc-300 bg-zinc-900/30"
+                }`}
+              >
+                <TemplatePreview layout={t.layout} active={isActive} />
+                <div className="text-center leading-tight">
+                  <div className="text-xs font-semibold">{t.name}</div>
+                  <div className="text-[10px] opacity-55 mt-0.5">{t.description}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── FRAME ── */}
+      <div className="flex items-center gap-3 pt-1">
+        <p className="text-[10px] font-bold tracking-[0.15em] text-zinc-600 uppercase shrink-0">Frame</p>
+        <div className="flex-1 h-px bg-zinc-800/60" />
       </div>
 
       {/* ── source video + preview ── */}
@@ -723,6 +795,12 @@ export default function ClipEditor({
             style={{ width: PW, height: PH }}
           />
         </div>
+      </div>
+
+      {/* ── TIMING ── */}
+      <div className="flex items-center gap-3 pt-1">
+        <p className="text-[10px] font-bold tracking-[0.15em] text-zinc-600 uppercase shrink-0">Timing</p>
+        <div className="flex-1 h-px bg-zinc-800/60" />
       </div>
 
       {/* ── trim & cuts editor ── */}
@@ -943,7 +1021,7 @@ export default function ClipEditor({
             <p className="text-sm font-semibold text-zinc-200">Convert to 9:16</p>
             {metaReady && (
               <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                {fmt(totalDuration)} selected{hasSegments ? ` · ${segs!.length - 1} cut${segs!.length - 1 !== 1 ? "s" : ""}` : ""} · {LAYOUTS.find(l => l.id === config.layout)?.label}
+                {fmt(totalDuration)} selected{hasSegments ? ` · ${segs!.length - 1} cut${segs!.length - 1 !== 1 ? "s" : ""}` : ""} · {TEMPLATES.find(t => t.id === activeTemplateId)?.name ?? LAYOUTS.find(l => l.id === config.layout)?.label}
               </p>
             )}
           </div>
@@ -1156,27 +1234,38 @@ function CropOverlay({ crop, onChange, containerRef, color, label }: CropOverlay
   );
 }
 
-// ─── layout icon ─────────────────────────────────────────────────────────────
+// ─── template preview ─────────────────────────────────────────────────────────
 
-function LayoutIcon({ id, active }: { id: LayoutPreset; active: boolean }) {
-  const gp = active ? "bg-violet-400/70" : "bg-zinc-600";
-  const fc = active ? "bg-orange-400/90" : "bg-zinc-500";
-  const divider = "bg-zinc-950/60";
+function TemplatePreview({ layout, active }: { layout: LayoutPreset; active: boolean }) {
+  const gp = active ? "bg-violet-500/70" : "bg-zinc-600/60";
+  const fc = active ? "bg-fuchsia-500/80" : "bg-zinc-500/70";
+  const div = "bg-zinc-950/80";
+  const wrap = `w-9 h-16 rounded-lg overflow-hidden flex flex-col flex-shrink-0 border ${active ? "border-violet-500/40" : "border-white/[0.07]"}`;
 
-  if (id === "fullscreen_facecam_top") {
+  if (layout === "fullscreen_facecam_top") {
     return (
-      <div className="w-7 h-12 rounded overflow-hidden flex flex-col flex-shrink-0">
-        <div className={`${fc}`} style={{ flex: "35 0 0" }} />
-        <div className={`h-px flex-shrink-0 ${divider}`} />
-        <div className={`${gp}`} style={{ flex: "65 0 0" }} />
+      <div className={wrap}>
+        <div className={fc} style={{ flex: "35 0 0" }} />
+        <div className={`h-px flex-shrink-0 ${div}`} />
+        <div className={gp} style={{ flex: "65 0 0" }} />
       </div>
     );
   }
+  if (layout === "split") {
+    return (
+      <div className={wrap}>
+        <div className={gp} style={{ flex: "60 0 0" }} />
+        <div className={`h-px flex-shrink-0 ${div}`} />
+        <div className={fc} style={{ flex: "40 0 0" }} />
+      </div>
+    );
+  }
+  // fullscreen_facecam_bottom
   return (
-    <div className="w-7 h-12 rounded overflow-hidden flex flex-col flex-shrink-0">
-      <div className={`${gp}`} style={{ flex: "65 0 0" }} />
-      <div className={`h-px flex-shrink-0 ${divider}`} />
-      <div className={`${fc}`} style={{ flex: "35 0 0" }} />
+    <div className={wrap}>
+      <div className={gp} style={{ flex: "65 0 0" }} />
+      <div className={`h-px flex-shrink-0 ${div}`} />
+      <div className={fc} style={{ flex: "35 0 0" }} />
     </div>
   );
 }

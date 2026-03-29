@@ -56,7 +56,7 @@ const DEFAULT_EDIT_CONFIG: EditConfig = {
 };
 
 // ── Version banner ────────────────────────────────────────────────────────────
-console.log("[processor] PROCESSOR VERSION: QUALITY_TIERS_V1");
+console.log("[processor] PROCESSOR VERSION: QUALITY_TIERS_V2_STABLE");
 console.log("[processor] cuts strategy: preprocess-stitch (no trim/atrim filter_complex)");
 console.log("[processor] quality tiers: free=720p/30fps/watermark  pro=1080p/30-60fps/no-watermark");
 
@@ -125,8 +125,10 @@ function buildFilterComplex(config: EditConfig, s: OutputSettings): string {
     layoutPart = `[0:v]${gpExpr},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[layout_out]`;
   } else if (config.layout === "blur_background") {
     const fgH = Math.round(H * 0.703); // keeps the same ~70% fill ratio as the original 900/1280
+    // boxblur radius scales with resolution — cap at 12 to avoid OOM at 1080p
+    const blurR = W >= 1080 ? 12 : 20;
     layoutPart = [
-      `[0:v]${gpExpr},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:5[bg]`,
+      `[0:v]${gpExpr},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=${blurR}:3[bg]`,
       `[0:v]${gpExpr},scale=-2:${fgH}:force_original_aspect_ratio=decrease[fg]`,
       `[bg][fg]overlay=(W-w)/2:(H-h)/2[layout_out]`,
     ].join(";");
@@ -405,8 +407,12 @@ async function processVideo(
     if (stitchedPath) try { if (fs.existsSync(stitchedPath)) fs.unlinkSync(stitchedPath); } catch {}
   };
 
+  const mem = process.memoryUsage();
+  console.log(`[ffmpeg:${jobId}] render start — rss=${Math.round(mem.rss / 1024 / 1024)}MB heap=${Math.round(mem.heapUsed / 1024 / 1024)}MB output=${settings.width}x${settings.height}@${settings.fps}fps`);
+
   return new Promise<Buffer>((resolve, reject) => {
     const stderrLines: string[] = [];
+    let lastProgressLog = 0;
 
     const cmd = ffmpeg(effectiveInputPath);
     if (inputOptions.length > 0) cmd.inputOptions(inputOptions);
@@ -420,6 +426,7 @@ async function processVideo(
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-crf", "28",
+        "-threads", "2",
         "-c:a", "aac",
         "-b:a", "96k",
         "-movflags", "+faststart",
@@ -431,6 +438,15 @@ async function processVideo(
         stderrLines.push(line);
         if (/error|warn|invalid|fail/i.test(line)) {
           console.warn(`[ffmpeg:${jobId}/stderr] ${line}`);
+        }
+        // Log progress every ~5 s worth of frames so we can see where SIGKILL hits
+        const frameMatch = line.match(/frame=\s*(\d+)/);
+        if (frameMatch) {
+          const frame = parseInt(frameMatch[1], 10);
+          if (frame - lastProgressLog >= 150) {
+            lastProgressLog = frame;
+            console.log(`[ffmpeg:${jobId}/progress] ${line.trim()}`);
+          }
         }
       })
       .on("end", () => {

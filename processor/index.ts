@@ -5,7 +5,7 @@ import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +47,12 @@ const DEFAULT_EDIT_CONFIG: EditConfig = {
   gameplayCrop: { x: 0.05, y: 0.05, width: 0.75, height: 0.75 },
   facecamCrop:  { x: 0.55, y: 0.55, width: 0.35, height: 0.35 },
 };
+
+// ── Version banner ────────────────────────────────────────────────────────────
+// Bump this tag whenever the cuts strategy changes so Railway logs confirm
+// which build is running before you look at anything else.
+console.log("[processor] PROCESSOR VERSION: CUTS_STITCH_V2");
+console.log("[processor] cuts strategy: preprocess-stitch (no trim/atrim filter_complex)");
 
 // ── FFmpeg setup ──────────────────────────────────────────────────────────────
 
@@ -136,135 +142,214 @@ function buildFilterComplex(config: EditConfig): string {
 }
 
 /**
- * Build a filter_complex that trims + concatenates the given segments from the
- * single input file, then applies the layout/crop filter to the result.
- *
- * Audio is included via atrim — if the source has no audio track FFmpeg will
- * error; this is acceptable for the V1 feature (gaming clips always have audio).
- *
- * The [0:v] input can be referenced multiple times in filter_complex (FFmpeg
- * auto-inserts a split). The concatenated video stream [cv] is a filter output
- * and MUST be explicitly split before dual use in gameplay + facecam crops.
+ * Low-level FFmpeg runner — spawns with an explicit args array, never a shell
+ * string. Resolves on exit code 0; rejects with a trimmed stderr tail otherwise.
  */
-function buildSegmentsFilterComplex(
-  segs: ClipSegment[],
-  config: EditConfig,
-): { filterComplex: string; videoMap: string; audioMap: string } {
-  const N = segs.length;
-  const { gameplayCrop: gp, facecamCrop: fc, layout } = config;
-  const gpExpr = cropExpr(gp);
-  const fcExpr = cropExpr(fc);
-  const FC_H = 448, GP_H = 832;
+function runFfmpeg(args: string[], label: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const bin  = ffmpegStatic ?? "ffmpeg";
+    const proc = spawn(bin, args);
+    const stderrLines: string[] = [];
 
-  const parts: string[] = [];
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderrLines.push(...chunk.toString().split("\n"));
+    });
 
-  // Trim each segment — video + audio
-  segs.forEach((s, i) => {
-    parts.push(`[0:v]trim=start=${s.start}:end=${s.end},setpts=PTS-STARTPTS[sv${i}]`);
-    parts.push(`[0:a]atrim=start=${s.start}:end=${s.end},asetpts=PTS-STARTPTS[sa${i}]`);
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        const tail = stderrLines.slice(-15).join("\n");
+        reject(new Error(`[${label}] ffmpeg exited with code ${code}:\n${tail}`));
+      }
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`[${label}] spawn failed: ${err.message}`));
+    });
   });
-
-  // Concat all segments into [cv] (video) and [ca] (audio)
-  const vList = segs.map((_, i) => `[sv${i}]`).join("");
-  const aList = segs.map((_, i) => `[sa${i}]`).join("");
-  parts.push(`${vList}${aList}concat=n=${N}:v=1:a=1[cv][ca]`);
-
-  // Apply layout — single-source layouts don't need a split
-  if (layout === "gameplay_only") {
-    parts.push(`[cv]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[out]`);
-  } else if (layout === "blur_background") {
-    parts.push(`[cv]split[cv1][cv2]`);
-    parts.push(`[cv1]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]`);
-    parts.push(`[cv2]${gpExpr},scale=-2:900:force_original_aspect_ratio=decrease[fg]`);
-    parts.push(`[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`);
-  } else {
-    // Split [cv] so it can be referenced twice (gameplay crop + facecam crop)
-    parts.push(`[cv]split[cv1][cv2]`);
-
-    if (layout === "split") {
-      parts.push(`[cv1]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`);
-      parts.push(`[cv2]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`);
-      parts.push(`[gp][fc]vstack[out]`);
-    } else if (layout === "fullscreen_facecam_top") {
-      parts.push(`[cv1]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
-      parts.push(`[cv2]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
-      parts.push(`[fc][gp]vstack[out]`);
-    } else {
-      // fullscreen_facecam_bottom
-      parts.push(`[cv1]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`);
-      parts.push(`[cv2]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`);
-      parts.push(`[gp][fc]vstack[out]`);
-    }
-  }
-
-  return {
-    filterComplex: parts.join(";"),
-    videoMap: "[out]",
-    audioMap: "[ca]",
-  };
 }
 
-function processVideo(
+/**
+ * Extract one time range from inputPath into outputPath using stream copy.
+ * -ss before -i = fast keyframe seek.
+ * -avoid_negative_ts make_zero resets the first timestamp to 0, which is
+ * required for the concat demuxer to stitch files without gaps or drift.
+ */
+async function extractSegment(
+  inputPath: string,
+  outputPath: string,
+  start: number,
+  end: number,
+  label: string,
+): Promise<void> {
+  await runFfmpeg(
+    [
+      "-ss", String(start),
+      "-t",  String(end - start),
+      "-i",  inputPath,
+      "-c",  "copy",
+      "-avoid_negative_ts", "make_zero",
+      "-y",
+      outputPath,
+    ],
+    label,
+  );
+}
+
+/**
+ * Given a list of time-range segments, extracts each as a temp MP4 then
+ * stitches them with the FFmpeg concat demuxer (not the concat filter).
+ *
+ * Why the demuxer instead of the filter graph:
+ *   The concat filter requires careful stream-type interleaving and is fragile
+ *   when combined with the layout filter_complex. The demuxer operates purely
+ *   at the container level — each segment is a stand-alone file, timestamps are
+ *   already reset to 0, and the stitch is a plain stream copy with no filter
+ *   graph whatsoever. The resulting file is a normal MP4 that feeds into the
+ *   existing render pipeline unchanged.
+ *
+ * Returns the path to the stitched temp file. The caller must delete it after use.
+ * If only one valid segment is given, that segment file is returned directly
+ * (no stitch step needed).
+ */
+async function buildStitchedInputFromCuts(
+  inputPath: string,
+  segments: ClipSegment[],
+  jobId: string,
+): Promise<string> {
+  const valid = segments
+    .filter((s) => s.start >= 0 && s.end > s.start)
+    .sort((a, b) => a.start - b.start);
+
+  if (valid.length === 0) {
+    throw new Error(`[${jobId}] buildStitchedInputFromCuts: no valid segments`);
+  }
+
+  const tmpDir   = os.tmpdir();
+  const segPaths: string[] = [];
+
+  // ── step 1: extract each segment ──────────────────────────────────────────
+  for (let i = 0; i < valid.length; i++) {
+    const { start, end } = valid[i];
+    const segPath = path.join(tmpDir, `streamvex_seg_${jobId}_${i}.mp4`);
+    console.log(`[${jobId}] segment ${i}: ${start}s–${end}s → ${segPath}`);
+    await extractSegment(inputPath, segPath, start, end, `${jobId}/seg${i}`);
+    segPaths.push(segPath);
+  }
+
+  // ── single segment: skip the concat step ──────────────────────────────────
+  if (segPaths.length === 1) {
+    console.log(`[${jobId}] single segment — skipping stitch`);
+    return segPaths[0];
+  }
+
+  // ── step 2: write the concat demuxer list ─────────────────────────────────
+  // -safe 0 allows absolute paths. Temp names use only [a-z0-9_.-] so no
+  // escaping of the paths is needed.
+  const listPath = path.join(tmpDir, `streamvex_concat_${jobId}.txt`);
+  fs.writeFileSync(
+    listPath,
+    segPaths.map((p) => `file '${p}'`).join("\n") + "\n",
+    "utf8",
+  );
+  console.log(`[${jobId}] concat list (${segPaths.length} entries) → ${listPath}`);
+
+  // ── step 3: stitch ────────────────────────────────────────────────────────
+  const stitchedPath = path.join(tmpDir, `streamvex_stitched_${jobId}.mp4`);
+  await runFfmpeg(
+    [
+      "-f",    "concat",
+      "-safe", "0",
+      "-i",    listPath,
+      "-c",    "copy",
+      "-y",
+      stitchedPath,
+    ],
+    `${jobId}/stitch`,
+  );
+  console.log(`[${jobId}] stitched → ${stitchedPath}`);
+
+  // ── step 4: clean up segment files + list (stitched file stays) ───────────
+  for (const p of segPaths) try { fs.unlinkSync(p); } catch {}
+  try { fs.unlinkSync(listPath); } catch {}
+
+  return stitchedPath;
+}
+
+async function processVideo(
   inputBuffer: Buffer,
   jobId: string,
   config: EditConfig,
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const tmpDir     = os.tmpdir();
-    const inputPath  = path.join(tmpDir, `streamvex_in_${jobId}.mp4`);
-    const outputPath = path.join(tmpDir, `streamvex_out_${jobId}.mp4`);
+  const tmpDir     = os.tmpdir();
+  const inputPath  = path.join(tmpDir, `streamvex_in_${jobId}.mp4`);
+  const outputPath = path.join(tmpDir, `streamvex_out_${jobId}.mp4`);
 
-    console.log(`[ffmpeg:${jobId}] writing ${inputBuffer.length} bytes → ${inputPath}`);
-    fs.writeFileSync(inputPath, inputBuffer);
+  console.log(`[ffmpeg:${jobId}] writing ${inputBuffer.length} bytes → ${inputPath}`);
+  fs.writeFileSync(inputPath, inputBuffer);
 
-    const segs = config.segments;
-    const hasSegments = Array.isArray(segs) && segs.length > 0;
+  // ── cuts preprocessing ────────────────────────────────────────────────────
+  // When segments are defined, extract + stitch them into one temp file first.
+  // The stitched file is a normal MP4 — the render pipeline below is unchanged.
+  const segs        = config.segments;
+  const hasSegments = Array.isArray(segs) && segs.length > 0;
 
-    let filterComplex: string;
-    let videoMap = "[out]";
-    let audioMap = "0:a?";
+  let stitchedPath: string | null = null;
+  let effectiveInputPath          = inputPath;
 
-    if (hasSegments) {
-      const result = buildSegmentsFilterComplex(segs!, config);
-      filterComplex = result.filterComplex;
-      videoMap = result.videoMap;
-      audioMap = result.audioMap;
-      console.log(`[ffmpeg:${jobId}] segments mode — ${segs!.length} segment(s)`);
-    } else {
-      filterComplex = buildFilterComplex(config);
+  if (hasSegments) {
+    console.log(`[ffmpeg:${jobId}] USING NEW STITCHED CUTS PATH — ${segs!.length} segment(s)`);
+    stitchedPath      = await buildStitchedInputFromCuts(inputPath, segs!, jobId);
+    effectiveInputPath = stitchedPath;
+  } else {
+    console.log(`[ffmpeg:${jobId}] no cuts — using original input directly`);
+  }
+
+  // ── render ────────────────────────────────────────────────────────────────
+  // Identical to the no-cuts path. effectiveInputPath is either the original
+  // file (no cuts) or the stitched file (cuts) — both are plain MP4s.
+  const filterComplex = buildFilterComplex(config);
+  console.log(`[ffmpeg:${jobId}] layout=${config.layout}`);
+  console.log(`[ffmpeg:${jobId}] filter_complex=${filterComplex}`);
+
+  // Input seek/trim — skip when cuts were used (stitched file is already trimmed).
+  const inputOptions: string[] = [];
+  if (!hasSegments) {
+    if (config.trimStart > 0) inputOptions.push("-ss", String(config.trimStart));
+    if (config.trimEnd !== null && config.trimEnd > config.trimStart) {
+      inputOptions.push("-t", String(config.trimEnd - config.trimStart));
     }
-    console.log(`[ffmpeg:${jobId}] layout=${config.layout}`);
-    console.log(`[ffmpeg:${jobId}] filter_complex=${filterComplex}`);
+  }
+  console.log(`[ffmpeg:${jobId}] inputOptions=${inputOptions.join(" ") || "(none)"}`);
 
-    const inputOptions: string[] = [];
-    if (!hasSegments) {
-      if (config.trimStart > 0) inputOptions.push("-ss", String(config.trimStart));
-      if (config.trimEnd !== null && config.trimEnd > config.trimStart) {
-        inputOptions.push("-t", String(config.trimEnd - config.trimStart));
-      }
-    }
-    console.log(`[ffmpeg:${jobId}] inputOptions=${inputOptions.join(" ") || "(none)"}`);
+  const cleanup = () => {
+    try { if (fs.existsSync(inputPath))  fs.unlinkSync(inputPath);  } catch {}
+    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+    if (stitchedPath) try { if (fs.existsSync(stitchedPath)) fs.unlinkSync(stitchedPath); } catch {}
+  };
 
-    let stderrLines: string[] = [];
+  return new Promise<Buffer>((resolve, reject) => {
+    const stderrLines: string[] = [];
 
-    const cmd = ffmpeg(inputPath);
+    const cmd = ffmpeg(effectiveInputPath);
     if (inputOptions.length > 0) cmd.inputOptions(inputOptions);
 
     cmd
       .outputOptions([
-  "-filter_complex", filterComplex,
-  "-map", videoMap,
-  "-map", audioMap,
-  "-r", "30",
-  "-c:v", "libx264",
-  "-preset", "ultrafast",
-  "-crf", "28",
-  "-c:a", "aac",
-  "-b:a", "96k",
-  "-movflags", "+faststart",
-  "-pix_fmt", "yuv420p",
-  "-y",
-])
+        "-filter_complex", filterComplex,
+        "-map", "[out]",
+        "-map", "0:a?",
+        "-r", "30",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "28",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        "-y",
+      ])
       .output(outputPath)
       .on("stderr", (line: string) => {
         stderrLines.push(line);
@@ -276,8 +361,7 @@ function processVideo(
         console.log(`[ffmpeg:${jobId}] finished — reading output`);
         try {
           const outputBuffer = fs.readFileSync(outputPath);
-          fs.unlinkSync(inputPath);
-          fs.unlinkSync(outputPath);
+          cleanup();
           resolve(outputBuffer);
         } catch (err) {
           reject(err);
@@ -287,10 +371,7 @@ function processVideo(
         const stderr = stderrLines.slice(-20).join("\n");
         console.error(`[ffmpeg:${jobId}] error: ${err.message}`);
         console.error(`[ffmpeg:${jobId}] stderr (last 20 lines):\n${stderr}`);
-        try {
-          if (fs.existsSync(inputPath))  fs.unlinkSync(inputPath);
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        } catch {}
+        cleanup();
         const enriched = new Error(err.message);
         (enriched as Error & { ffmpegStderr: string }).ffmpegStderr = stderr;
         reject(enriched);

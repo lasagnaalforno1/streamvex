@@ -56,7 +56,7 @@ const DEFAULT_EDIT_CONFIG: EditConfig = {
 };
 
 // ── Version banner ────────────────────────────────────────────────────────────
-console.log("[processor] PROCESSOR VERSION: QUALITY_TIERS_V2_STABLE");
+console.log("[processor] PROCESSOR VERSION: QUALITY_TIERS_V3_PNG_WATERMARK");
 console.log("[processor] cuts strategy: preprocess-stitch (no trim/atrim filter_complex)");
 console.log("[processor] quality tiers: free=720p/30fps/watermark  pro=1080p/30-60fps/no-watermark");
 
@@ -64,6 +64,16 @@ console.log("[processor] quality tiers: free=720p/30fps/watermark  pro=1080p/30-
 
 console.log("[ffmpeg] platform:", process.platform, "arch:", process.arch);
 console.log("[ffmpeg] ffmpeg-static resolved path:", ffmpegStatic);
+
+// ── Watermark asset ───────────────────────────────────────────────────────────
+// Place a transparent PNG at processor/assets/watermark.png
+// Recommended: white text/logo on transparent background, ~500 px wide
+const WATERMARK_PATH = path.join(__dirname, "assets", "watermark.png");
+if (fs.existsSync(WATERMARK_PATH)) {
+  console.log(`[ffmpeg] watermark asset found: ${WATERMARK_PATH}`);
+} else {
+  console.warn(`[ffmpeg] watermark asset NOT FOUND: ${WATERMARK_PATH} — free-tier exports will fail`);
+}
 
 if (ffmpegStatic) {
   try {
@@ -152,11 +162,12 @@ function buildFilterComplex(config: EditConfig, s: OutputSettings): string {
   }
 
   if (s.watermark) {
-    // Proportional sizing: ~32px text at 1280h, ~20px padding
-    const fontsize = Math.round(H * 0.025);
-    const padX     = Math.round(W * 0.028);
-    const padY     = Math.round(H * 0.016);
-    return `${layoutPart};[layout_out]drawtext=text='streamvex.com':fontsize=${fontsize}:fontcolor=white@0.6:x=w-tw-${padX}:y=h-th-${padY}[out]`;
+    // Scale the PNG to ~22% of output width; overlay bottom-right with small margin.
+    // [1:v] = second FFmpeg input — the watermark PNG added in processVideo.
+    const wmW  = Math.round(W * 0.22);
+    const padX = Math.round(W * 0.028);
+    const padY = Math.round(H * 0.016);
+    return `${layoutPart};[1:v]scale=${wmW}:-1[wm];[layout_out][wm]overlay=W-w-${padX}:H-h-${padY}[out]`;
   }
 
   // No watermark — rename the label directly
@@ -416,6 +427,7 @@ async function processVideo(
 
     const cmd = ffmpeg(effectiveInputPath);
     if (inputOptions.length > 0) cmd.inputOptions(inputOptions);
+    if (settings.watermark) cmd.input(WATERMARK_PATH);
 
     cmd
       .outputOptions([

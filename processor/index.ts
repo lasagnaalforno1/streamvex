@@ -70,7 +70,11 @@ console.log("[ffmpeg] ffmpeg-static resolved path:", ffmpegStatic);
 // Recommended: white text/logo on transparent background, ~500 px wide
 const WATERMARK_PATH = path.join(__dirname, "assets", "watermark.png");
 if (fs.existsSync(WATERMARK_PATH)) {
-  console.log(`[ffmpeg] watermark asset found: ${WATERMARK_PATH}`);
+  const wmStat = fs.statSync(WATERMARK_PATH);
+  console.log(`[ffmpeg] watermark asset found: ${WATERMARK_PATH} (${wmStat.size} bytes)`);
+  if (wmStat.size === 0) {
+    console.error("[ffmpeg] watermark asset is 0 bytes — FFmpeg will reject it");
+  }
 } else {
   console.warn(`[ffmpeg] watermark asset NOT FOUND: ${WATERMARK_PATH} — free-tier exports will fail`);
 }
@@ -287,11 +291,16 @@ function getOutputSettings(
 ): OutputSettings {
   const hasAccess = isPro || isCreator;
 
-  if (!hasAccess || preset === "standard") {
+  // Free users always get 720p/30fps/watermark regardless of requested preset
+  if (!hasAccess) {
     return { width: 720, height: 1280, fps: 30, watermark: true };
   }
 
-  // Pro / Creator — honour the requested preset, with source-fps gate for ultra
+  // Pro / Creator — no watermark ever; standard preset = 720p, higher = 1080p
+  if (preset === "standard") {
+    return { width: 720, height: 1280, fps: 30, watermark: false };
+  }
+
   const want60 = preset === "ultra" && sourceFps >= 50;
   return { width: 1080, height: 1920, fps: want60 ? 60 : 30, watermark: false };
 }
@@ -427,7 +436,9 @@ async function processVideo(
 
     const cmd = ffmpeg(effectiveInputPath);
     if (inputOptions.length > 0) cmd.inputOptions(inputOptions);
-    if (settings.watermark) cmd.input(WATERMARK_PATH);
+    // -loop 1 tells FFmpeg to treat the still PNG as an infinite looping stream
+    // so the overlay filter has frames to composite for the full video duration.
+    if (settings.watermark) cmd.input(WATERMARK_PATH).inputOptions(["-loop", "1"]);
 
     cmd
       .outputOptions([

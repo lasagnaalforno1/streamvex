@@ -20,6 +20,14 @@ export default async function ClipPage({ params }: Props) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // ── Plan entitlements ────────────────────────────────────────────────────
+  // Stored in user_metadata to avoid an extra DB query on every page load.
+  // Set via Supabase service-role in your upgrade webhook / admin panel.
+  const plan      = (user!.user_metadata?.plan      as string | undefined) ?? "free";
+  const role      = (user!.user_metadata?.role      as string | undefined) ?? "";
+  const isPro     = plan === "pro";
+  const isCreator = role === "creator";
+
   const { data: clip } = await supabase
     .from("clips")
     .select("*")
@@ -104,6 +112,9 @@ export default async function ClipPage({ params }: Props) {
           initialTrimStart={typedClip.trim_start_seconds}
           initialTrimEnd={typedClip.trim_end_seconds}
           initialDuration={typedClip.duration}
+          isPro={isPro}
+          isCreator={isCreator}
+          sourceHighFpsEligible={(typedClip as any)?.source_fps ?? 0 >= 50}
         />
       ) : (
         <div className="glass-card p-8 flex items-center justify-center text-zinc-600 text-sm">

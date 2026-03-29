@@ -7,7 +7,7 @@ interface Params {
   params: Promise<{ id: string }>;
 }
 
-export async function POST(_request: Request, { params }: Params) {
+export async function POST(request: Request, { params }: Params) {
   const { id } = await params;
 
   // Validate processor env vars immediately — fail loudly before touching the DB
@@ -49,6 +49,17 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
 
     console.log(`[process:${id}] user=${user.id}`);
 
+    // Read preset from request body (sent by the export modal)
+    const body = await request.json().catch(() => ({})) as { preset?: string };
+    const preset = body.preset ?? "standard";
+
+    // ── Plan entitlement — read from user_metadata (set by upgrade webhook) ──
+    const plan      = (user.user_metadata?.plan as string | undefined) ?? "free";
+    const role      = (user.user_metadata?.role as string | undefined) ?? "";
+    const isPro     = plan === "pro";
+    const isCreator = role === "creator";
+    console.log(`[process:${id}] isPro=${isPro} isCreator=${isCreator} preset=${preset}`);
+
     // Fetch clip — RLS guarantees it belongs to this user
     const { data: clip, error: clipError } = await supabase
       .from("clips")
@@ -72,17 +83,6 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
       return NextResponse.json({ error: "Clip is already processing." }, { status: 409 });
     }
 
-    // ── Plan entitlement check ─────────────────────────────────────────────────
-    // Replace this query with whatever table/column stores your subscription plan.
-    // Expected values: "pro" = Pro tier, anything else = Free.
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("plan")
-      .eq("id", user.id)
-      .single();
-    const isPro = profile?.plan === "pro";
-    console.log(`[process:${id}] isPro=${isPro} (plan=${profile?.plan ?? "none"})`);
-
     // Mark as processing before calling the processor
     await serviceClient
       .from("clips")
@@ -100,7 +100,7 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
           "Content-Type": "application/json",
           "X-Processor-Secret": PROCESSOR_SECRET,
         },
-        body: JSON.stringify({ isPro }),
+        body: JSON.stringify({ isPro, isCreator, preset }),
         signal: AbortSignal.timeout(280_000), // 4m40s — leaves headroom under maxDuration
       });
     } catch (fetchError) {

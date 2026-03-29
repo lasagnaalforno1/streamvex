@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ClipStatus, EditConfig, LayoutPreset, CropBox, ClipSegment } from "@/lib/types";
 import { DEFAULT_EDIT_CONFIG } from "@/lib/types";
 import ProBadge from "@/components/ui/ProBadge";
+import ExportModal, { type ExportPreset } from "@/components/dashboard/ExportModal";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -224,6 +225,9 @@ interface Props {
   initialTrimStart: number | null;
   initialTrimEnd: number | null;
   initialDuration: number | null;
+  isPro: boolean;
+  isCreator: boolean;
+  sourceHighFpsEligible: boolean;
 }
 
 // ─── component ────────────────────────────────────────────────────────────────
@@ -231,6 +235,7 @@ interface Props {
 export default function ClipEditor({
   clipId, inputUrl, outputUrl, status,
   initialConfig, initialTrimStart, initialTrimEnd, initialDuration,
+  isPro, isCreator, sourceHighFpsEligible,
 }: Props) {
   const router = useRouter();
 
@@ -255,6 +260,7 @@ export default function ClipEditor({
   const [cutStart,      setCutStart]     = useState<number | null>(null);
   const [segHistory,    setSegHistory]   = useState<ClipSegment[][]>([]);
   const [proModal,      setProModal]     = useState<string | null>(null);
+  const [exportModal,   setExportModal]  = useState(false);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(
     () => initialConfig ? null : "facecam_top"
   );
@@ -608,7 +614,8 @@ export default function ClipEditor({
     }
   }
 
-  async function handleProcess() {
+  async function handleProcess(preset: ExportPreset) {
+    setExportModal(false);
     setSaveError(null);
     setProcessError(null);
     // Flush any pending auto-save first
@@ -619,7 +626,11 @@ export default function ClipEditor({
     }
     setProcessing(true);
     try {
-      const res  = await fetch(`/api/process/${clipId}`, { method: "POST" });
+      const res  = await fetch(`/api/process/${clipId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset }),
+      });
       const json = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(json.error ?? "Processing failed.");
       router.refresh();
@@ -1094,7 +1105,7 @@ export default function ClipEditor({
           </div>
           <button
             disabled={!canProcess}
-            onClick={handleProcess}
+            onClick={() => setExportModal(true)}
             className={`shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-xl
                         text-sm font-semibold transition-colors
                         ${canProcess
@@ -1119,6 +1130,17 @@ export default function ClipEditor({
           </div>
         )}
       </div>
+
+      {/* ── Export quality modal ── */}
+      {exportModal && (
+        <ExportModal
+          isPro={isPro}
+          isCreator={isCreator}
+          sourceHighFpsEligible={sourceHighFpsEligible}
+          onConfirm={handleProcess}
+          onClose={() => setExportModal(false)}
+        />
+      )}
 
       {/* ── Pro upgrade modal ── */}
       {proModal && (

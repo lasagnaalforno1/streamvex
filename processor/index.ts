@@ -254,22 +254,33 @@ async function getSourceFps(inputPath: string): Promise<number> {
 }
 
 /**
- * Resolve output encoding settings based on the user's plan tier and the
- * detected source framerate.
+ * Resolve output encoding settings based on the user's plan tier, the
+ * requested preset, and the detected source framerate.
  *
- * Free : 720×1280  30 fps  watermark
- * Pro  : 1080×1920 30 fps  no watermark
- *        1080×1920 60 fps  no watermark  — only when source >= 50 fps
+ * Presets (frontend names → behaviour):
+ *   standard — 720×1280  30 fps  watermark      (always available)
+ *   high     — 1080×1920 30 fps  no watermark   (requires Pro/Creator)
+ *   ultra    — 1080×1920 60 fps  no watermark   (requires Pro/Creator + source >= 50 fps)
  *
- * 60 fps is gated on source fps so we never manufacture frames that weren't
- * there and don't bloat file size without a real quality gain.
+ * The backend is the source of truth: if a free user somehow sends "high" or
+ * "ultra", the response is silently downgraded to "standard" settings.
+ * 60 fps is further gated on source fps so we never manufacture frames.
  */
-function getOutputSettings(isPro: boolean, sourceFps: number): OutputSettings {
-  if (!isPro) {
+function getOutputSettings(
+  isPro: boolean,
+  isCreator: boolean,
+  preset: string,
+  sourceFps: number,
+): OutputSettings {
+  const hasAccess = isPro || isCreator;
+
+  if (!hasAccess || preset === "standard") {
     return { width: 720, height: 1280, fps: 30, watermark: true };
   }
-  const fps = sourceFps >= 50 ? 60 : 30;
-  return { width: 1080, height: 1920, fps, watermark: false };
+
+  // Pro / Creator — honour the requested preset, with source-fps gate for ultra
+  const want60 = preset === "ultra" && sourceFps >= 50;
+  return { width: 1080, height: 1920, fps: want60 ? 60 : 30, watermark: false };
 }
 
 async function buildStitchedInputFromCuts(
@@ -341,6 +352,8 @@ async function processVideo(
   jobId: string,
   config: EditConfig,
   isPro: boolean,
+  isCreator: boolean,
+  preset: string,
 ): Promise<Buffer> {
   const tmpDir     = os.tmpdir();
   const inputPath  = path.join(tmpDir, `streamvex_in_${jobId}.mp4`);
@@ -368,8 +381,8 @@ async function processVideo(
 
   // ── quality tier ──────────────────────────────────────────────────────────
   const sourceFps = await getSourceFps(effectiveInputPath);
-  const settings  = getOutputSettings(isPro, sourceFps);
-  console.log(`[ffmpeg:${jobId}] tier=${isPro ? "pro" : "free"} source_fps=${sourceFps} output=${settings.width}x${settings.height}@${settings.fps}fps watermark=${settings.watermark}`);
+  const settings  = getOutputSettings(isPro, isCreator, preset, sourceFps);
+  console.log(`[ffmpeg:${jobId}] tier=${isPro ? "pro" : isCreator ? "creator" : "free"} preset=${preset} source_fps=${sourceFps} output=${settings.width}x${settings.height}@${settings.fps}fps watermark=${settings.watermark}`);
 
   // ── render ────────────────────────────────────────────────────────────────
   const filterComplex = buildFilterComplex(config, settings);
@@ -539,14 +552,17 @@ app.post("/process/:id", requireSecret, async (req: Request, res: Response) => {
     };
     console.log(`[process:${clipId}] config:`, JSON.stringify(config));
 
-    // Entitlement: Next.js passes isPro after checking the user's plan
-    const isPro = Boolean((req.body as { isPro?: boolean }).isPro);
-    console.log(`[process:${clipId}] isPro=${isPro}`);
+    // Entitlements forwarded from Next.js after server-side plan check
+    const body      = req.body as { isPro?: boolean; isCreator?: boolean; preset?: string };
+    const isPro     = Boolean(body.isPro);
+    const isCreator = Boolean(body.isCreator);
+    const preset    = typeof body.preset === "string" ? body.preset : "standard";
+    console.log(`[process:${clipId}] isPro=${isPro} isCreator=${isCreator} preset=${preset}`);
 
     // Run FFmpeg
     let outputBuffer: Buffer;
     try {
-      outputBuffer = await processVideo(inputBuffer, clipId, config, isPro);
+      outputBuffer = await processVideo(inputBuffer, clipId, config, isPro, isCreator, preset);
     } catch (ffmpegError) {
       const rawMsg = ffmpegError instanceof Error ? ffmpegError.message : "FFmpeg processing failed.";
       const stderr = (ffmpegError as Error & { ffmpegStderr?: string }).ffmpegStderr ?? "";

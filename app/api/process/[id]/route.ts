@@ -72,6 +72,17 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
       return NextResponse.json({ error: "Clip is already processing." }, { status: 409 });
     }
 
+    // ── Plan entitlement check ─────────────────────────────────────────────────
+    // Replace this query with whatever table/column stores your subscription plan.
+    // Expected values: "pro" = Pro tier, anything else = Free.
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", user.id)
+      .single();
+    const isPro = profile?.plan === "pro";
+    console.log(`[process:${id}] isPro=${isPro} (plan=${profile?.plan ?? "none"})`);
+
     // Mark as processing before calling the processor
     await serviceClient
       .from("clips")
@@ -89,6 +100,7 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
           "Content-Type": "application/json",
           "X-Processor-Secret": PROCESSOR_SECRET,
         },
+        body: JSON.stringify({ isPro }),
         signal: AbortSignal.timeout(280_000), // 4m40s — leaves headroom under maxDuration
       });
     } catch (fetchError) {
@@ -135,7 +147,7 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
   } catch (err) {
     console.error(`[process:${id}] unexpected error:`, err);
     try {
-      const serviceClient = await createServiceClient();
+      const serviceClient = createServiceClient();
       const msg = err instanceof Error ? err.message : "Unexpected server error.";
       await serviceClient
         .from("clips")

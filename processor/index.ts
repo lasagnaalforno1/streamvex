@@ -40,6 +40,13 @@ interface EditConfig {
   segments?: ClipSegment[];
 }
 
+interface OutputSettings {
+  width: number;    // output frame width  (720 free / 1080 pro)
+  height: number;   // output frame height (1280 free / 1920 pro)
+  fps: number;      // 30 always for free; 30 or 60 for pro
+  watermark: boolean;
+}
+
 const DEFAULT_EDIT_CONFIG: EditConfig = {
   trimStart: 0,
   trimEnd: null,
@@ -49,10 +56,9 @@ const DEFAULT_EDIT_CONFIG: EditConfig = {
 };
 
 // ── Version banner ────────────────────────────────────────────────────────────
-// Bump this tag whenever the cuts strategy changes so Railway logs confirm
-// which build is running before you look at anything else.
-console.log("[processor] PROCESSOR VERSION: CUTS_STITCH_V2");
+console.log("[processor] PROCESSOR VERSION: QUALITY_TIERS_V1");
 console.log("[processor] cuts strategy: preprocess-stitch (no trim/atrim filter_complex)");
+console.log("[processor] quality tiers: free=720p/30fps/watermark  pro=1080p/30-60fps/no-watermark");
 
 // ── FFmpeg setup ──────────────────────────────────────────────────────────────
 
@@ -99,46 +105,60 @@ function cropExpr(c: CropBox): string {
   return `crop=iw*${width}:ih*${height}:iw*${x}:ih*${y}`;
 }
 
-function buildFilterComplex(config: EditConfig): string {
+function buildFilterComplex(config: EditConfig, s: OutputSettings): string {
+  const { width: W, height: H } = s;
   const gpExpr = cropExpr(config.gameplayCrop);
   const fcExpr = cropExpr(config.facecamCrop);
 
+  // Each branch produces [layout_out]. The watermark step below converts it to [out].
+  let layoutPart: string;
+
   if (config.layout === "split") {
-    return [
-      `[0:v]${gpExpr},scale=720:768:force_original_aspect_ratio=increase,crop=720:768[gp]`,
-      `[0:v]${fcExpr},scale=720:512:force_original_aspect_ratio=increase,crop=720:512[fc]`,
-      `[gp][fc]vstack[out]`,
+    const gpH = Math.round(H * 0.6);
+    const fcH = H - gpH;
+    layoutPart = [
+      `[0:v]${gpExpr},scale=${W}:${gpH}:force_original_aspect_ratio=increase,crop=${W}:${gpH}[gp]`,
+      `[0:v]${fcExpr},scale=${W}:${fcH}:force_original_aspect_ratio=increase,crop=${W}:${fcH}[fc]`,
+      `[gp][fc]vstack[layout_out]`,
     ].join(";");
-  }
-
-  if (config.layout === "gameplay_only") {
-    return `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[out]`;
-  }
-
-  if (config.layout === "blur_background") {
-    return [
-      `[0:v]${gpExpr},scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]`,
-      `[0:v]${gpExpr},scale=-2:900:force_original_aspect_ratio=decrease[fg]`,
-      `[bg][fg]overlay=(W-w)/2:(H-h)/2[out]`,
+  } else if (config.layout === "gameplay_only") {
+    layoutPart = `[0:v]${gpExpr},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[layout_out]`;
+  } else if (config.layout === "blur_background") {
+    const fgH = Math.round(H * 0.703); // keeps the same ~70% fill ratio as the original 900/1280
+    layoutPart = [
+      `[0:v]${gpExpr},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:5[bg]`,
+      `[0:v]${gpExpr},scale=-2:${fgH}:force_original_aspect_ratio=decrease[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2[layout_out]`,
     ].join(";");
+  } else {
+    // fullscreen_facecam_top / fullscreen_facecam_bottom
+    const FC_H = Math.round(H * 0.35); // facecam takes 35% of height
+    const GP_H = H - FC_H;
+    if (config.layout === "fullscreen_facecam_top") {
+      layoutPart = [
+        `[0:v]${fcExpr},scale=${W}:${FC_H}:force_original_aspect_ratio=increase,crop=${W}:${FC_H}[fc]`,
+        `[0:v]${gpExpr},scale=${W}:${GP_H}:force_original_aspect_ratio=increase,crop=${W}:${GP_H}[gp]`,
+        `[fc][gp]vstack[layout_out]`,
+      ].join(";");
+    } else {
+      layoutPart = [
+        `[0:v]${gpExpr},scale=${W}:${GP_H}:force_original_aspect_ratio=increase,crop=${W}:${GP_H}[gp]`,
+        `[0:v]${fcExpr},scale=${W}:${FC_H}:force_original_aspect_ratio=increase,crop=${W}:${FC_H}[fc]`,
+        `[gp][fc]vstack[layout_out]`,
+      ].join(";");
+    }
   }
 
-  const FC_H = 448;
-  const GP_H = 832;
-
-  if (config.layout === "fullscreen_facecam_top") {
-    return [
-      `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
-      `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
-      `[fc][gp]vstack[out]`,
-    ].join(";");
+  if (s.watermark) {
+    // Proportional sizing: ~32px text at 1280h, ~20px padding
+    const fontsize = Math.round(H * 0.025);
+    const padX     = Math.round(W * 0.028);
+    const padY     = Math.round(H * 0.016);
+    return `${layoutPart};[layout_out]drawtext=text='streamvex.com':fontsize=${fontsize}:fontcolor=white@0.6:x=w-tw-${padX}:y=h-th-${padY}[out]`;
   }
 
-  return [
-    `[0:v]${gpExpr},scale=720:${GP_H}:force_original_aspect_ratio=increase,crop=720:${GP_H}[gp]`,
-    `[0:v]${fcExpr},scale=720:${FC_H}:force_original_aspect_ratio=increase,crop=720:${FC_H}[fc]`,
-    `[gp][fc]vstack[out]`,
-  ].join(";");
+  // No watermark — rename the label directly
+  return layoutPart.replace("[layout_out]", "[out]");
 }
 
 /**
@@ -213,6 +233,45 @@ async function extractSegment(
  * If only one valid segment is given, that segment file is returned directly
  * (no stitch step needed).
  */
+/**
+ * Detect the video framerate of `inputPath` by running `ffmpeg -i` and parsing
+ * its stderr. FFmpeg always exits non-zero when no output is given, but it
+ * always prints stream metadata first. We parse the first "N fps" occurrence.
+ * Returns 30 on any failure so processing always continues.
+ */
+async function getSourceFps(inputPath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const bin  = ffmpegStatic ?? "ffmpeg";
+    const proc = spawn(bin, ["-i", inputPath]);
+    let stderr = "";
+    proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.on("close", () => {
+      const match = stderr.match(/(\d+(?:\.\d+)?)\s+fps/);
+      resolve(match ? parseFloat(match[1]) : 30);
+    });
+    proc.on("error", () => resolve(30));
+  });
+}
+
+/**
+ * Resolve output encoding settings based on the user's plan tier and the
+ * detected source framerate.
+ *
+ * Free : 720×1280  30 fps  watermark
+ * Pro  : 1080×1920 30 fps  no watermark
+ *        1080×1920 60 fps  no watermark  — only when source >= 50 fps
+ *
+ * 60 fps is gated on source fps so we never manufacture frames that weren't
+ * there and don't bloat file size without a real quality gain.
+ */
+function getOutputSettings(isPro: boolean, sourceFps: number): OutputSettings {
+  if (!isPro) {
+    return { width: 720, height: 1280, fps: 30, watermark: true };
+  }
+  const fps = sourceFps >= 50 ? 60 : 30;
+  return { width: 1080, height: 1920, fps, watermark: false };
+}
+
 async function buildStitchedInputFromCuts(
   inputPath: string,
   segments: ClipSegment[],
@@ -281,6 +340,7 @@ async function processVideo(
   inputBuffer: Buffer,
   jobId: string,
   config: EditConfig,
+  isPro: boolean,
 ): Promise<Buffer> {
   const tmpDir     = os.tmpdir();
   const inputPath  = path.join(tmpDir, `streamvex_in_${jobId}.mp4`);
@@ -306,10 +366,13 @@ async function processVideo(
     console.log(`[ffmpeg:${jobId}] no cuts — using original input directly`);
   }
 
+  // ── quality tier ──────────────────────────────────────────────────────────
+  const sourceFps = await getSourceFps(effectiveInputPath);
+  const settings  = getOutputSettings(isPro, sourceFps);
+  console.log(`[ffmpeg:${jobId}] tier=${isPro ? "pro" : "free"} source_fps=${sourceFps} output=${settings.width}x${settings.height}@${settings.fps}fps watermark=${settings.watermark}`);
+
   // ── render ────────────────────────────────────────────────────────────────
-  // Identical to the no-cuts path. effectiveInputPath is either the original
-  // file (no cuts) or the stitched file (cuts) — both are plain MP4s.
-  const filterComplex = buildFilterComplex(config);
+  const filterComplex = buildFilterComplex(config, settings);
   console.log(`[ffmpeg:${jobId}] layout=${config.layout}`);
   console.log(`[ffmpeg:${jobId}] filter_complex=${filterComplex}`);
 
@@ -340,7 +403,7 @@ async function processVideo(
         "-filter_complex", filterComplex,
         "-map", "[out]",
         "-map", "0:a?",
-        "-r", "30",
+        "-r", String(settings.fps),
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-crf", "28",
@@ -476,10 +539,14 @@ app.post("/process/:id", requireSecret, async (req: Request, res: Response) => {
     };
     console.log(`[process:${clipId}] config:`, JSON.stringify(config));
 
+    // Entitlement: Next.js passes isPro after checking the user's plan
+    const isPro = Boolean((req.body as { isPro?: boolean }).isPro);
+    console.log(`[process:${clipId}] isPro=${isPro}`);
+
     // Run FFmpeg
     let outputBuffer: Buffer;
     try {
-      outputBuffer = await processVideo(inputBuffer, clipId, config);
+      outputBuffer = await processVideo(inputBuffer, clipId, config, isPro);
     } catch (ffmpegError) {
       const rawMsg = ffmpegError instanceof Error ? ffmpegError.message : "FFmpeg processing failed.";
       const stderr = (ffmpegError as Error & { ffmpegStderr?: string }).ffmpegStderr ?? "";

@@ -101,7 +101,6 @@ console.log(`[process:${id}] normalized PROCESSOR_URL=${PROCESSOR_URL || "(not s
           "X-Processor-Secret": PROCESSOR_SECRET,
         },
         body: JSON.stringify({ isPro, isCreator, preset }),
-        signal: AbortSignal.timeout(280_000), // 4m40s — leaves headroom under maxDuration
       });
     } catch (fetchError) {
       const msg =
